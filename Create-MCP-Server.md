@@ -1,5 +1,26 @@
 # Graphite Editor MCP Server — Implementation Plan
 
+> **⚠️ This is a historical implementation plan, kept for context only.**
+> It reflects early design iterations and is **not** an accurate description
+> of the current MCP server.
+>
+> The implemented, authoritative MCP server is the **`graphite-mcp-client`**
+> relay plus the browser-side bridge in `frontend/src/mcp-bridge.ts` (with
+> handlers in `frontend/wrapper/src/editor_wrapper.rs`). For setup, the real
+> tool list, and the rules an AI agent must follow to avoid timeouts and
+> errors, see **[`tools/graphite-mcp-client/README.md`](tools/graphite-mcp-client/README.md)**.
+>
+> In particular:
+> - The "Phase 4" claims below that all 24 tools are functional refer to the
+>   legacy in-process crate (`tools/graphite-mcp-server/`), whose editor
+>   bridge is in fact still stubbed.
+> - `list_documents` does **not** return a list of documents.
+> - `set_fill_color` sets fill **opacity**, not a color.
+> - The powerful `import_svg`, `create_path`, and `batch_create` tools are
+>   not mentioned in this plan at all — they live in the browser bridge.
+
+---
+
 ## Architecture Pivot: Blender MCP Pattern
 
 **Decision:** Switch from headless MCP server to the Blender MCP pattern where:

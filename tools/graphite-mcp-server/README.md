@@ -1,4 +1,20 @@
-# Graphite MCP Server
+# Graphite MCP Server (legacy / catalog-only)
+
+> **⚠️ This document describes the legacy in-process MCP server crate.**
+> It is **not** the MCP server that AI agents connect to in normal use.
+>
+> The authoritative, currently-used MCP server is the **`graphite-mcp-client`**
+> relay + the browser-side bridge in `frontend/src/mcp-bridge.ts`. See
+> [`../graphite-mcp-client/README.md`](../graphite-mcp-client/README.md) for
+> the real setup, tool list, and agent guidance.
+>
+> This crate (`tools/graphite-mcp-server/`) remains useful only for
+> **standalone node-catalog queries** (`graphite-mcp --standalone`). The
+> `--mcp` headed mode and the editor-bridge tool handlers described below are
+> **stubs** — most return `"(handler not yet implemented)"` (see
+> `src/editor_bridge.rs`). Do not rely on them for editor automation.
+
+---
 
 An MCP (Model Context Protocol) server for the Graphite vector graphics editor, giving AI agents full control over the editor.
 
