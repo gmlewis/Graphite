@@ -50,6 +50,10 @@ impl DesktopWrapper {
 		executor.execute()
 	}
 
+	pub fn editor(&mut self) -> &mut Editor {
+		&mut self.editor
+	}
+
 	pub async fn execute_node_graph() -> NodeGraphExecutionResult {
 		let result = graphite_editor::node_graph_executor::run_node_graph().await;
 		match result {

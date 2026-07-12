@@ -180,7 +180,29 @@ impl App {
 				vec!["(document created)".to_string()]
 			}
 			"get_layer_tree" => {
-				vec!["(layer tree requires direct state access — not yet implemented)".to_string()]
+				let editor = self.desktop_wrapper.editor();
+				match editor.active_document() {
+					Some(doc) => {
+						let metadata = doc.metadata();
+						let network = &doc.network_interface;
+						let mut out = String::new();
+						out.push_str("# Layer Tree\n\n");
+						for layer in metadata.all_layers() {
+							let node_id = layer.to_node();
+							let name = network.display_name(&node_id, &[]);
+							let visible = network.is_visible(&node_id, &[]);
+							let locked = network.is_locked(&node_id, &[]);
+							let is_layer = network.is_layer(&node_id, &[]);
+							let is_artboard = network.is_artboard(&node_id, &[]);
+							let kind = if is_artboard { "artboard" } else if is_layer { "layer" } else { "group" };
+							let vis = if visible { "" } else { " [hidden]" };
+							let lock = if locked { " [locked]" } else { "" };
+							out.push_str(&format!("- `{}` {} {}{vis}{lock}\n", node_id.0, kind, name));
+						}
+						vec![out]
+					}
+					None => vec!["No active document".to_string()],
+				}
 			}
 			"create_rectangle" => {
 				let x = args.get("x").and_then(|v| v.as_f64()).unwrap_or(0.);
@@ -284,7 +306,36 @@ impl App {
 				vec![format!("Set fill opacity to {opacity}%")]
 			}
 			"set_stroke" => {
-				vec!["(set_stroke requires per-layer GraphOperation — not yet implemented via DocumentMessage)".to_string()]
+				let color_str = args.get("color").and_then(|v| v.as_str()).unwrap_or("#000000");
+				let weight = args.get("width").and_then(|v| v.as_f64()).unwrap_or(2.);
+				let hex = color_str.trim().trim_start_matches('#');
+				let r = u8::from_str_radix(&hex[0..2], 16).map_err(|e| format!("Invalid color hex: {e}"))? as f32 / 255.;
+				let g = u8::from_str_radix(&hex[2..4], 16).map_err(|e| format!("Invalid color hex: {e}"))? as f32 / 255.;
+				let b = u8::from_str_radix(&hex[4..6], 16).map_err(|e| format!("Invalid color hex: {e}"))? as f32 / 255.;
+				let a = if hex.len() >= 8 { u8::from_str_radix(&hex[6..8], 16).map_err(|e| format!("Invalid color hex: {e}"))? as f32 / 255. } else { 1. };
+				let color = graphene_std::Color::from_rgbaf32_unchecked(r, g, b, a);
+				let editor = self.desktop_wrapper.editor();
+				let selected_layer = editor.active_document()
+					.and_then(|doc| {
+						let metadata = doc.metadata();
+						doc.network_interface.selected_nodes().selected_layers(metadata).next()
+					});
+				match selected_layer {
+					Some(layer) => {
+						let stroke = graphene_std::vector::style::Stroke {
+							weight,
+							..Default::default()
+						};
+						let _ = editor;
+						self.desktop_wrapper.dispatch(DesktopWrapperMessage::FromWeb(Box::new(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::GraphOperation(GraphOperationMessage::StrokeSet {
+							layer,
+							color: Some(color),
+							stroke,
+						}))))));
+						vec![format!("Set stroke on layer: weight={weight}, color={color_str}")]
+					}
+					None => vec!["No layer selected".to_string()],
+				}
 			}
 			"set_opacity" => {
 				let opacity = args.get("opacity").and_then(|v| v.as_f64()).unwrap_or(100.);
@@ -341,13 +392,76 @@ impl App {
 				vec![format!("Moved selected layers by ({dx}, {dy})")]
 			}
 			"get_selection" => {
-				vec!["(get_selection requires direct state access — not yet implemented)".to_string()]
+				let editor = self.desktop_wrapper.editor();
+				match editor.active_document() {
+					Some(doc) => {
+						let metadata = doc.metadata();
+						let selected = doc.network_interface.selected_nodes();
+						let layers: Vec<String> = selected.selected_layers(metadata)
+							.map(|l| {
+								let node_id = l.to_node();
+								let name = doc.network_interface.display_name(&node_id, &[]);
+								format!("{} ({})", node_id.0, name)
+							})
+							.collect();
+						if layers.is_empty() {
+							vec!["No layers selected".to_string()]
+						} else {
+							vec![format!("Selected layers ({}):\n{}", layers.len(), layers.join("\n"))]
+						}
+					}
+					None => vec!["No active document".to_string()],
+				}
 			}
 			"get_layer_properties" => {
-				vec!["(get_layer_properties requires direct state access — not yet implemented)".to_string()]
+				let layer_id_str = args.get("layer_id").and_then(|v| v.as_str()).ok_or("Missing layer_id")?;
+				let id_num: u64 = layer_id_str.parse().map_err(|e| format!("Invalid layer_id '{layer_id_str}': {e}"))?;
+				let node_id = NodeId(id_num);
+				let editor = self.desktop_wrapper.editor();
+				match editor.active_document() {
+					Some(doc) => {
+						let network = &doc.network_interface;
+						let name = network.display_name(&node_id, &[]);
+						let visible = network.is_visible(&node_id, &[]);
+						let locked = network.is_locked(&node_id, &[]);
+						let is_layer = network.is_layer(&node_id, &[]);
+						let is_artboard = network.is_artboard(&node_id, &[]);
+						let kind = if is_artboard { "artboard" } else if is_layer { "layer" } else { "group" };
+						let mut out = format!("# Layer Properties: {name}\n\n");
+						out.push_str(&format!("- **ID:** `{}`\n", node_id.0));
+						out.push_str(&format!("- **Kind:** {kind}\n"));
+						out.push_str(&format!("- **Visible:** {visible}\n"));
+						out.push_str(&format!("- **Locked:** {locked}\n"));
+						vec![out]
+					}
+					None => vec!["No active document".to_string()],
+				}
 			}
 			"get_node_graph" => {
-				vec!["(get_node_graph requires direct state access — not yet implemented)".to_string()]
+				let layer_id_str = args.get("layer_id").and_then(|v| v.as_str()).ok_or("Missing layer_id")?;
+				let id_num: u64 = layer_id_str.parse().map_err(|e| format!("Invalid layer_id '{layer_id_str}': {e}"))?;
+				let node_id = NodeId(id_num);
+				let editor = self.desktop_wrapper.editor();
+				match editor.active_document() {
+					Some(doc) => {
+						let network = &doc.network_interface;
+						let name = network.display_name(&node_id, &[]);
+						match network.document_node(&node_id, &[]) {
+							Some(node) => {
+								let mut out = format!("# Node Graph: {name}\n\n");
+								out.push_str(&format!("**Node ID:** `{}`\n", node_id.0));
+								out.push_str(&format!("**Implementation:** {:?}\n", node.implementation));
+								out.push_str(&format!("**Inputs:** {}\n", node.inputs.len()));
+								for (i, input) in node.inputs.iter().enumerate() {
+									out.push_str(&format!("  - Input {i}: {input:?}\n"));
+								}
+								vec![out]
+							}
+							None => vec![format!("Node {id_num} not found")],
+						}
+					}
+					None => vec!["No active document".to_string()],
+				}
 			}
 			"activate_tool" => {
 				let tool = args.get("tool").and_then(|v| v.as_str()).unwrap_or("Select");
