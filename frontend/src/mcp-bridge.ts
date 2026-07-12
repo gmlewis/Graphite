@@ -78,6 +78,8 @@ export function startMcpBridge(editor: EditorWrapper): void {
 	function sendMessage(text: string) {
 		if (ws && ws.readyState === WebSocket.OPEN) {
 			ws.send(text);
+		} else {
+			console.warn("[MCP Bridge] Cannot send response — WebSocket not open");
 		}
 	}
 
@@ -86,10 +88,12 @@ export function startMcpBridge(editor: EditorWrapper): void {
 		try {
 			request = JSON.parse(text);
 		} catch {
+			console.warn("[MCP Bridge] Failed to parse message:", text);
 			return;
 		}
 
 		const { jsonrpc, id, method, params } = request;
+		console.log("[MCP Bridge] Received:", method, "id:", id);
 
 		if (method === "initialize") {
 			sendMessage(JSON.stringify({
@@ -118,16 +122,20 @@ export function startMcpBridge(editor: EditorWrapper): void {
 		if (method === "tools/call") {
 			const toolName = (params as { name?: string })?.name ?? "";
 			const arguments_ = (params as { arguments?: Record<string, unknown> })?.arguments ?? {};
+			console.log("[MCP Bridge] Tool call:", toolName);
 			let resultJson: string;
 			try {
 				resultJson = editor.mcpToolCall(toolName, JSON.stringify(arguments_));
+				console.log("[MCP Bridge] Tool result:", resultJson.slice(0, 200));
 			} catch (e) {
+				console.error("[MCP Bridge] Tool error:", e);
 				resultJson = JSON.stringify({ content: [{ type: "text", text: `Error: ${e}` }], isError: true });
 			}
 			sendMessage(JSON.stringify({
 				jsonrpc, id,
 				result: JSON.parse(resultJson),
 			}));
+			console.log("[MCP Bridge] Response sent for", toolName);
 			return;
 		}
 

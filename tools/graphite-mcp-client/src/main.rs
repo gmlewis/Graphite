@@ -183,15 +183,15 @@ async fn main() -> Result<()> {
 			continue;
 		}
 
-		// Wait for the response from the browser
-		match response_rx.recv().await {
-			Some(resp_text) => {
+		// Wait for the response from the browser (with a 15-second timeout)
+		match tokio::time::timeout(tokio::time::Duration::from_secs(15), response_rx.recv()).await {
+			Ok(Some(resp_text)) => {
 				let mut resp = resp_text;
 				resp.push('\n');
 				stdout.write_all(resp.as_bytes()).await?;
 				stdout.flush().await?;
 			}
-			None => {
+			Ok(None) => {
 				// Channel closed (browser disconnected)
 				let id = extract_id(&line);
 				let error_response = serde_json::json!({
@@ -200,6 +200,22 @@ async fn main() -> Result<()> {
 					"error": {
 						"code": -32000,
 						"message": "Browser disconnected during tool call"
+					}
+				});
+				let mut resp = serde_json::to_string(&error_response)?;
+				resp.push('\n');
+				stdout.write_all(resp.as_bytes()).await?;
+				stdout.flush().await?;
+			}
+			Err(_) => {
+				// Timeout
+				let id = extract_id(&line);
+				let error_response = serde_json::json!({
+					"jsonrpc": "2.0",
+					"id": id,
+					"error": {
+						"code": -32001,
+						"message": "Tool call timed out (browser did not respond within 15 seconds)"
 					}
 				});
 				let mut resp = serde_json::to_string(&error_response)?;

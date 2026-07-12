@@ -1007,8 +1007,22 @@ impl EditorWrapper {
 	/// This is called from the browser-side MCP bridge to control the editor from an AI agent.
 	#[wasm_bindgen(js_name = mcpToolCall)]
 	pub fn mcp_tool_call(&self, tool_name: String, args_json: String) -> String {
-		let args: serde_json::Value = serde_json::from_str(&args_json).unwrap_or(serde_json::json!({}));
-		mcp_tool_handler(self, &tool_name, &args)
+		let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			let args: serde_json::Value = serde_json::from_str(&args_json).unwrap_or(serde_json::json!({}));
+			mcp_tool_handler(self, &tool_name, &args)
+		}));
+		match result {
+			Ok(s) => s,
+			Err(e) => {
+				let msg = if let Some(s) = e.downcast_ref::<&str>() { s.to_string() }
+					else if let Some(s) = e.downcast_ref::<String>() { s.clone() }
+					else { "Unknown panic".to_string() };
+				serde_json::to_string(&serde_json::json!({
+					"content": [{"type": "text", "text": format!("WASM panic: {msg}")}],
+					"isError": true
+				})).unwrap_or_else(|_| r#"{"content":[{"type":"text","text":"Serialization error"}],"isError":true}"#.into())
+			}
+		}
 	}
 }
 
@@ -1021,6 +1035,18 @@ fn mcp_tool_handler(wrapper: &EditorWrapper, tool_name: &str, args: &serde_json:
 	// Helper to dispatch a message
 	let dispatch = |msg: Message| {
 		wrapper.dispatch(msg);
+	};
+
+	// Helper to validate SVG has a root <svg> element before dispatching
+	let validate_svg = |svg: &str, tool_name: &str| -> Result<(), String> {
+		let trimmed = svg.trim();
+		if !trimmed.starts_with("<svg") {
+			return Err(format!("{tool_name}: SVG must have a root <svg> element"));
+		}
+		if !trimmed.contains("</svg>") {
+			return Err(format!("{tool_name}: SVG is missing closing </svg> tag"));
+		}
+		Ok(())
 	};
 
 	// Helper to read editor state
@@ -1089,7 +1115,12 @@ fn mcp_tool_handler(wrapper: &EditorWrapper, tool_name: &str, args: &serde_json:
 			let h = args.get("height").and_then(|v| v.as_f64()).unwrap_or(100.);
 			let fill = args.get("fill_color").and_then(|v| v.as_str()).unwrap_or("#000000");
 			let r = args.get("corner_radius").and_then(|v| v.as_f64()).unwrap_or(0.);
-			let svg = format!(r#"<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="{r}" fill="{fill}"/>"#);
+			let view_w = x + w;
+			let view_h = y + h;
+			let svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {view_w} {view_h}"><rect x="{x}" y="{y}" width="{w}" height="{h}" rx="{r}" fill="{fill}"/></svg>"#);
+			if let Err(e) = validate_svg(&svg, "create_rectangle") {
+				return serde_json::to_string(&serde_json::json!({"content": [{"type": "text", "text": e}], "isError": true})).unwrap();
+			}
 			dispatch(Message::Portfolio(PortfolioMessage::InsertSvg {
 				name: Some("Rectangle".into()),
 				svg,
@@ -1105,7 +1136,12 @@ fn mcp_tool_handler(wrapper: &EditorWrapper, tool_name: &str, args: &serde_json:
 			let rx = args.get("radius_x").and_then(|v| v.as_f64()).unwrap_or(50.);
 			let ry = args.get("radius_y").and_then(|v| v.as_f64()).unwrap_or(50.);
 			let fill = args.get("fill_color").and_then(|v| v.as_str()).unwrap_or("#000000");
-			let svg = format!(r#"<ellipse cx="{cx}" cy="{cy}" rx="{rx}" ry="{ry}" fill="{fill}"/>"#);
+			let view_w = cx + rx;
+			let view_h = cy + ry;
+			let svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {view_w} {view_h}"><ellipse cx="{cx}" cy="{cy}" rx="{rx}" ry="{ry}" fill="{fill}"/></svg>"#);
+			if let Err(e) = validate_svg(&svg, "create_ellipse") {
+				return serde_json::to_string(&serde_json::json!({"content": [{"type": "text", "text": e}], "isError": true})).unwrap();
+			}
 			dispatch(Message::Portfolio(PortfolioMessage::InsertSvg {
 				name: Some("Ellipse".into()),
 				svg,
@@ -1122,7 +1158,12 @@ fn mcp_tool_handler(wrapper: &EditorWrapper, tool_name: &str, args: &serde_json:
 			let y2 = args.get("y2").and_then(|v| v.as_f64()).unwrap_or(100.);
 			let stroke = args.get("stroke_color").and_then(|v| v.as_str()).unwrap_or("#000000");
 			let sw = args.get("stroke_width").and_then(|v| v.as_f64()).unwrap_or(2.);
-			let svg = format!(r#"<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="{stroke}" stroke-width="{sw}"/>"#);
+			let view_w = x1.max(x2) + sw;
+			let view_h = y1.max(y2) + sw;
+			let svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {view_w} {view_h}"><line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="{stroke}" stroke-width="{sw}"/></svg>"#);
+			if let Err(e) = validate_svg(&svg, "create_line") {
+				return serde_json::to_string(&serde_json::json!({"content": [{"type": "text", "text": e}], "isError": true})).unwrap();
+			}
 			dispatch(Message::Portfolio(PortfolioMessage::InsertSvg {
 				name: Some("Line".into()),
 				svg,
@@ -1138,7 +1179,13 @@ fn mcp_tool_handler(wrapper: &EditorWrapper, tool_name: &str, args: &serde_json:
 			let text = args.get("text").and_then(|v| v.as_str()).unwrap_or("Text");
 			let font_size = args.get("font_size").and_then(|v| v.as_f64()).unwrap_or(24.);
 			let fill = args.get("fill_color").and_then(|v| v.as_str()).unwrap_or("#000000");
-			let svg = format!(r#"<text x="{x}" y="{y}" font-size="{font_size}" fill="{fill}">{text}</text>"#);
+			let est_width = text.len() as f64 * font_size * 0.6;
+			let view_w = x + est_width;
+			let view_h = y + font_size * 1.2;
+			let svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {view_w} {view_h}"><text x="{x}" y="{y}" font-size="{font_size}" fill="{fill}">{text}</text></svg>"#);
+			if let Err(e) = validate_svg(&svg, "create_text") {
+				return serde_json::to_string(&serde_json::json!({"content": [{"type": "text", "text": e}], "isError": true})).unwrap();
+			}
 			dispatch(Message::Portfolio(PortfolioMessage::InsertSvg {
 				name: Some("Text".into()),
 				svg,
