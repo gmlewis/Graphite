@@ -27,6 +27,7 @@ use graph_craft::document::NodeId;
 use graphene_std::color::SRGBA8;
 use graphene_std::graphene_hash::CacheHashWrapper;
 use graphene_std::raster::color::Color;
+use graphene_std::text::{Font, TypesettingConfig};
 use graphene_std::vector::style::{FillChoice, FillChoiceUI};
 use serde::Serialize;
 use serde_wasm_bindgen::{self, from_value};
@@ -1157,18 +1158,19 @@ fn mcp_tool_handler(wrapper: &EditorWrapper, tool_name: &str, args: &serde_json:
 			let h = args.get("height").and_then(|v| v.as_f64()).unwrap_or(100.);
 			let fill = args.get("fill_color").and_then(|v| v.as_str()).unwrap_or("#000000");
 			let r = args.get("corner_radius").and_then(|v| v.as_f64()).unwrap_or(0.);
-			let view_w = x + w;
-			let view_h = y + h;
-			let svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {view_w} {view_h}"><rect x="{x}" y="{y}" width="{w}" height="{h}" rx="{r}" fill="{fill}"/></svg>"#);
+			let svg_w = x + w;
+			let svg_h = y + h;
+			let svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="{svg_w}" height="{svg_h}"><rect x="{x}" y="{y}" width="{w}" height="{h}" rx="{r}" fill="{fill}"/></svg>"#);
 			if let Err(e) = validate_svg(&svg, "create_rectangle") {
 				return serde_json::to_string(&serde_json::json!({"content": [{"type": "text", "text": e}], "isError": true})).unwrap();
 			}
-			if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::InsertSvg {
+			if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::InsertSvg {
 				name: Some("Rectangle".into()),
 				svg,
 				mouse: None,
 				parent_and_insert_index: None,
-			})) { return err; }
+				place_at_origin: true,
+			}))) { return err; }
 			serde_json::json!({"content": [{"type": "text", "text": format!("Created rectangle at ({x}, {y}) {w}x{h}")}]})
 		}
 
@@ -1178,18 +1180,19 @@ fn mcp_tool_handler(wrapper: &EditorWrapper, tool_name: &str, args: &serde_json:
 			let rx = args.get("radius_x").and_then(|v| v.as_f64()).unwrap_or(50.);
 			let ry = args.get("radius_y").and_then(|v| v.as_f64()).unwrap_or(50.);
 			let fill = args.get("fill_color").and_then(|v| v.as_str()).unwrap_or("#000000");
-			let view_w = cx + rx;
-			let view_h = cy + ry;
-			let svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {view_w} {view_h}"><ellipse cx="{cx}" cy="{cy}" rx="{rx}" ry="{ry}" fill="{fill}"/></svg>"#);
+			let svg_w = cx + rx;
+			let svg_h = cy + ry;
+			let svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="{svg_w}" height="{svg_h}"><ellipse cx="{cx}" cy="{cy}" rx="{rx}" ry="{ry}" fill="{fill}"/></svg>"#);
 			if let Err(e) = validate_svg(&svg, "create_ellipse") {
 				return serde_json::to_string(&serde_json::json!({"content": [{"type": "text", "text": e}], "isError": true})).unwrap();
 			}
-			if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::InsertSvg {
+			if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::InsertSvg {
 				name: Some("Ellipse".into()),
 				svg,
 				mouse: None,
 				parent_and_insert_index: None,
-			})) { return err; }
+				place_at_origin: true,
+			}))) { return err; }
 			serde_json::json!({"content": [{"type": "text", "text": format!("Created ellipse at ({cx}, {cy}) rx={rx} ry={ry}")}]})
 		}
 
@@ -1200,40 +1203,65 @@ fn mcp_tool_handler(wrapper: &EditorWrapper, tool_name: &str, args: &serde_json:
 			let y2 = args.get("y2").and_then(|v| v.as_f64()).unwrap_or(100.);
 			let stroke = args.get("stroke_color").and_then(|v| v.as_str()).unwrap_or("#000000");
 			let sw = args.get("stroke_width").and_then(|v| v.as_f64()).unwrap_or(2.);
-			let view_w = x1.max(x2) + sw;
-			let view_h = y1.max(y2) + sw;
-			let svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {view_w} {view_h}"><line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="{stroke}" stroke-width="{sw}"/></svg>"#);
+			let svg_w = x1.max(x2) + sw;
+			let svg_h = y1.max(y2) + sw;
+			let svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="{svg_w}" height="{svg_h}"><line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="{stroke}" stroke-width="{sw}"/></svg>"#);
 			if let Err(e) = validate_svg(&svg, "create_line") {
 				return serde_json::to_string(&serde_json::json!({"content": [{"type": "text", "text": e}], "isError": true})).unwrap();
 			}
-			if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::InsertSvg {
+			if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::InsertSvg {
 				name: Some("Line".into()),
 				svg,
 				mouse: None,
 				parent_and_insert_index: None,
-			})) { return err; }
+				place_at_origin: true,
+			}))) { return err; }
 			serde_json::json!({"content": [{"type": "text", "text": format!("Created line ({x1},{y1}) to ({x2},{y2})")}]})
 		}
 
 		"create_text" => {
 			let x = args.get("x").and_then(|v| v.as_f64()).unwrap_or(0.);
 			let y = args.get("y").and_then(|v| v.as_f64()).unwrap_or(0.);
-			let text = args.get("text").and_then(|v| v.as_str()).unwrap_or("Text");
+			let text = args.get("text").and_then(|v| v.as_str()).unwrap_or("Text").to_string();
 			let font_size = args.get("font_size").and_then(|v| v.as_f64()).unwrap_or(24.);
 			let fill = args.get("fill_color").and_then(|v| v.as_str()).unwrap_or("#000000");
-			let est_width = text.len() as f64 * font_size * 0.6;
-			let view_w = x + est_width;
-			let view_h = y + font_size * 1.2;
-			let svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {view_w} {view_h}"><text x="{x}" y="{y}" font-size="{font_size}" fill="{fill}">{text}</text></svg>"#);
-			if let Err(e) = validate_svg(&svg, "create_text") {
-				return serde_json::to_string(&serde_json::json!({"content": [{"type": "text", "text": e}], "isError": true})).unwrap();
-			}
-			if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::InsertSvg {
-				name: Some("Text".into()),
-				svg,
-				mouse: None,
-				parent_and_insert_index: None,
-			})) { return err; }
+
+			let font = Font::new(graphene_std::consts::DEFAULT_FONT_FAMILY.to_string(), graphene_std::consts::DEFAULT_FONT_STYLE.to_string());
+			let typesetting = TypesettingConfig {
+				font_size,
+				..Default::default()
+			};
+			let layer_id = NodeId::new();
+
+			if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::GraphOperation(GraphOperationMessage::NewTextLayer {
+				id: layer_id,
+				text: text.clone(),
+				font,
+				typesetting,
+				parent: LayerNodeIdentifier::ROOT_PARENT,
+				insert_index: 0,
+			})))) { return err; }
+
+			// Set position via transform
+			if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::GraphOperation(GraphOperationMessage::TransformSet {
+				layer: LayerNodeIdentifier::new_unchecked(layer_id),
+				transform: glam::DAffine2::from_translation(glam::DVec2::new(x, y)),
+				transform_in: editor::messages::portfolio::document::graph_operation::utility_types::TransformIn::Local,
+				skip_rerender: false,
+			})))) { return err; }
+
+			// Set fill color
+			let hex = fill.trim().trim_start_matches('#');
+			let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0) as f32 / 255.;
+			let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(0) as f32 / 255.;
+			let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0) as f32 / 255.;
+			let a = if hex.len() >= 8 { u8::from_str_radix(&hex[6..8], 16).unwrap_or(255) as f32 / 255. } else { 1. };
+			let color = Color::from_rgbaf32_unchecked(r, g, b, a);
+			if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::GraphOperation(GraphOperationMessage::FillColorSet {
+				layer: LayerNodeIdentifier::new_unchecked(layer_id),
+				color: Some(color),
+			})))) { return err; }
+
 			serde_json::json!({"content": [{"type": "text", "text": format!("Created text at ({x}, {y}): \"{text}\"")}]})
 		}
 
@@ -1443,6 +1471,207 @@ fn mcp_tool_handler(wrapper: &EditorWrapper, tool_name: &str, args: &serde_json:
 				serde_json::json!({"content": [{"type": "text", "text": format!("Set stroke: weight={weight}, color={color_str}")}]})
 			} else {
 				serde_json::json!({"content": [{"type": "text", "text": "No layer selected"}], "isError": true})
+			}
+		}
+
+		"get_document_info" => {
+			let info = with_editor(&|editor| {
+				match editor.active_document() {
+					Some(doc) => {
+						let metadata = doc.metadata();
+						let network = &doc.network_interface;
+						let all_layers: Vec<_> = metadata.all_layers().collect();
+						let layer_count = all_layers.len();
+						let artboard_count = all_layers.iter().filter(|l| network.is_artboard(&l.to_node(), &[])).count();
+						let selected = doc.network_interface.selected_nodes();
+						let selected_count = selected.selected_layers(metadata).count();
+						let bounds = metadata.document_to_viewport;
+						let out = format!(
+							"# Document Info\n\n- **Name:** {}\n- **Layers:** {}\n- **Artboards:** {}\n- **Selected:** {}\n- **Has content:** {}",
+							doc.name, layer_count, artboard_count, selected_count, layer_count > 0
+						);
+						serde_json::json!(out)
+					}
+					None => serde_json::json!("No active document"),
+				}
+			});
+			serde_json::json!({"content": [{"type": "text", "text": info}]})
+		}
+
+		"get_layer_bounds" => {
+			let id_num = args.get("layer_id").and_then(|v| v.as_str()).and_then(|s| s.parse::<u64>().ok()).or_else(|| args.get("layer_id").and_then(|v| v.as_u64()));
+			let bounds_info = with_editor(&|editor| {
+				match (id_num, editor.active_document()) {
+					(Some(id), Some(doc)) => {
+						let node_id = NodeId(id);
+						let metadata = doc.metadata();
+						let layer = LayerNodeIdentifier::new_unchecked(node_id);
+							match metadata.bounding_box_document(layer) {
+								Some(bbox) => {
+									let out = format!(
+										"# Layer Bounds\n\n- **Layer ID:** `{id}`\n- **Min:** ({:.1}, {:.1})\n- **Max:** ({:.1}, {:.1})\n- **Size:** {:.1} x {:.1}",
+										bbox[0].x, bbox[0].y, bbox[1].x, bbox[1].y,
+										bbox[1].x - bbox[0].x, bbox[1].y - bbox[0].y
+									);
+									serde_json::json!(out)
+								}
+							None => serde_json::json!(format!("Layer {id} has no bounding box (possibly invisible or empty)")),
+						}
+					}
+					_ => serde_json::json!("No active document or invalid layer_id"),
+				}
+			});
+			serde_json::json!({"content": [{"type": "text", "text": bounds_info}]})
+		}
+
+		"get_selected_layer_info" => {
+			let info = with_editor(&|editor| {
+				match editor.active_document() {
+					Some(doc) => {
+						let metadata = doc.metadata();
+						let network = &doc.network_interface;
+						let selected = doc.network_interface.selected_nodes();
+						let layers: Vec<_> = selected.selected_layers(metadata).collect();
+						if layers.is_empty() {
+							return serde_json::json!("No layers selected");
+						}
+						let mut out = String::from("# Selected Layers\n\n");
+						for layer in &layers {
+							let node_id = layer.to_node();
+							let name = network.display_name(&node_id, &[]);
+							let visible = network.is_visible(&node_id, &[]);
+							let locked = network.is_locked(&node_id, &[]);
+							let is_layer = network.is_layer(&node_id, &[]);
+							let is_artboard = network.is_artboard(&node_id, &[]);
+							let kind = if is_artboard { "artboard" } else if is_layer { "layer" } else { "group" };
+							let bbox = metadata.bounding_box_document(*layer);
+							let bbox_str = match bbox {
+								Some(b) => format!("({:.1},{:.1}) to ({:.1},{:.1})", b[0].x, b[0].y, b[1].x, b[1].y),
+								None => "no bounds".to_string(),
+							};
+							let vis = if visible { "" } else { " [hidden]" };
+							let lock = if locked { " [locked]" } else { "" };
+							out.push_str(&format!("- `{}` {} {}{}{} — bounds: {}\n", node_id.0, kind, name, vis, lock, bbox_str));
+						}
+						serde_json::json!(out)
+					}
+					None => serde_json::json!("No active document"),
+				}
+			});
+			serde_json::json!({"content": [{"type": "text", "text": info}]})
+		}
+
+		"import_svg" => {
+			let svg = match args.get("svg").and_then(|v| v.as_str()) {
+				Some(s) => s.to_string(),
+				None => return serde_json::to_string(&serde_json::json!({"content": [{"type": "text", "text": "Error: missing 'svg' parameter"}], "isError": true})).unwrap(),
+			};
+			let name = args.get("name").and_then(|v| v.as_str()).map(|s| s.to_string());
+			if let Err(e) = validate_svg(&svg, "import_svg") {
+				return serde_json::to_string(&serde_json::json!({"content": [{"type": "text", "text": e}], "isError": true})).unwrap();
+			}
+			if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::InsertSvg {
+				name,
+				svg,
+				mouse: None,
+				parent_and_insert_index: None,
+				place_at_origin: true,
+			}))) { return err; }
+			serde_json::json!({"content": [{"type": "text", "text": "SVG imported successfully"}]})
+		}
+
+		"create_path" => {
+			let d = match args.get("d").and_then(|v| v.as_str()) {
+				Some(s) => s.to_string(),
+				None => return serde_json::to_string(&serde_json::json!({"content": [{"type": "text", "text": "Error: missing 'd' (path data) parameter"}], "isError": true})).unwrap(),
+			};
+			let fill = args.get("fill_color").and_then(|v| v.as_str()).unwrap_or("#000000");
+			let stroke = args.get("stroke_color").and_then(|v| v.as_str());
+			let stroke_w = args.get("stroke_width").and_then(|v| v.as_f64()).unwrap_or(0.);
+			let tx = args.get("x").and_then(|v| v.as_f64()).unwrap_or(0.);
+			let ty = args.get("y").and_then(|v| v.as_f64()).unwrap_or(0.);
+			let stroke_attr = match stroke {
+				Some(c) => format!(" stroke=\"{c}\" stroke-width=\"{stroke_w}\""),
+				None => String::new(),
+			};
+			let svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><path d="{d}" fill="{fill}"{stroke_attr} transform="translate({tx},{ty})"/></svg>"#);
+			if let Err(e) = validate_svg(&svg, "create_path") {
+				return serde_json::to_string(&serde_json::json!({"content": [{"type": "text", "text": e}], "isError": true})).unwrap();
+			}
+			if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::InsertSvg {
+				name: Some("Path".into()),
+				svg,
+				mouse: None,
+				parent_and_insert_index: None,
+				place_at_origin: true,
+			}))) { return err; }
+			serde_json::json!({"content": [{"type": "text", "text": "Path created"}]})
+		}
+
+		"batch_create" => {
+			let shapes = match args.get("shapes").and_then(|v| v.as_array()) {
+				Some(arr) => arr.clone(),
+				None => return serde_json::to_string(&serde_json::json!({"content": [{"type": "text", "text": "Error: missing 'shapes' array parameter"}], "isError": true})).unwrap(),
+			};
+			let count = shapes.len();
+			let mut errors: Vec<String> = Vec::new();
+			for (i, shape) in shapes.iter().enumerate() {
+				let shape_type = shape.get("type").and_then(|v| v.as_str()).unwrap_or("rectangle");
+				let x = shape.get("x").and_then(|v| v.as_f64()).unwrap_or(0.);
+				let y = shape.get("y").and_then(|v| v.as_f64()).unwrap_or(0.);
+				let fill = shape.get("fill_color").and_then(|v| v.as_str()).unwrap_or("#000000");
+				let svg_result = match shape_type {
+					"rectangle" => {
+						let w = shape.get("width").and_then(|v| v.as_f64()).unwrap_or(100.);
+						let h = shape.get("height").and_then(|v| v.as_f64()).unwrap_or(100.);
+						let r = shape.get("corner_radius").and_then(|v| v.as_f64()).unwrap_or(0.);
+						let svg_w = x + w;
+						let svg_h = y + h;
+						format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="{svg_w}" height="{svg_h}"><rect x="{x}" y="{y}" width="{w}" height="{h}" rx="{r}" fill="{fill}"/></svg>"#)
+					}
+					"ellipse" => {
+						let rx = shape.get("radius_x").and_then(|v| v.as_f64()).unwrap_or(50.);
+						let ry = shape.get("radius_y").and_then(|v| v.as_f64()).unwrap_or(50.);
+						let svg_w = x + rx;
+						let svg_h = y + ry;
+						format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="{svg_w}" height="{svg_h}"><ellipse cx="{x}" cy="{y}" rx="{rx}" ry="{ry}" fill="{fill}"/></svg>"#)
+					}
+					"line" => {
+						let x2 = shape.get("x2").and_then(|v| v.as_f64()).unwrap_or(x + 100.);
+						let y2 = shape.get("y2").and_then(|v| v.as_f64()).unwrap_or(y + 100.);
+						let stroke_color = shape.get("stroke_color").and_then(|v| v.as_str()).unwrap_or(fill);
+						let sw = shape.get("stroke_width").and_then(|v| v.as_f64()).unwrap_or(2.);
+						let svg_w = x.max(x2) + sw;
+						let svg_h = y.max(y2) + sw;
+						format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="{svg_w}" height="{svg_h}"><line x1="{x}" y1="{y}" x2="{x2}" y2="{y2}" stroke="{stroke_color}" stroke-width="{sw}"/></svg>"#)
+					}
+					"text" => {
+						let content = shape.get("text").and_then(|v| v.as_str()).unwrap_or("Text");
+						let font_size = shape.get("font_size").and_then(|v| v.as_f64()).unwrap_or(24.);
+						let est_w = content.len() as f64 * font_size * 0.6;
+						let svg_w = x + est_w;
+						let svg_h = y + font_size * 1.2;
+						format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="{svg_w}" height="{svg_h}"><text x="{x}" y="{y}" font-size="{font_size}" font-family="sans-serif" fill="{fill}">{content}</text></svg>"#)
+					}
+					_ => {
+						errors.push(format!("Shape {i}: unknown type '{shape_type}'"));
+						continue;
+					}
+				};
+				if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::InsertSvg {
+					name: Some(format!("Batch {i}")),
+					svg: svg_result,
+					mouse: None,
+					parent_and_insert_index: None,
+					place_at_origin: true,
+				}))) {
+					errors.push(format!("Shape {i}: {err}"));
+				}
+			}
+			if errors.is_empty() {
+				serde_json::json!({"content": [{"type": "text", "text": format!("Created {count} shapes successfully")}]})
+			} else {
+				serde_json::json!({"content": [{"type": "text", "text": format!("Created {} shapes. Errors: {}", count - errors.len(), errors.join("; "))}], "isError": errors.len() == count})
 			}
 		}
 
