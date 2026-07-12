@@ -2321,6 +2321,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "graphite-mcp-server"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "document-container",
+ "env_logger",
+ "glam",
+ "graph-craft",
+ "graphene-std",
+ "graphite-editor",
+ "interpreted-executor",
+ "log",
+ "preprocessor",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "graphite-proc-macros"
 version = "0.0.0"
 dependencies = [

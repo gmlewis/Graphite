@@ -1,0 +1,41 @@
+[package]
+name = "graphite-mcp-server"
+description = "MCP Server for the Graphite vector graphics editor"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "graphite-mcp"
+path = "src/main.rs"
+
+[features]
+default = ["editor-integration"]
+editor-integration = [
+    "dep:graphite-editor",
+    "dep:graphene-std",
+    "dep:graph-craft",
+    "dep:interpreted-executor",
+    "dep:preprocessor",
+    "dep:document-container",
+    "dep:glam",
+]
+
+[dependencies]
+# MCP server core (always needed)
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { version = "1", features = ["macros", "io-std", "io-util", "rt", "rt-multi-thread"] }
+log = { workspace = true }
+env_logger = { workspace = true }
+anyhow = { workspace = true }
+
+# Editor integration (optional, enabled by default in workspace)
+graphite-editor = { workspace = true, optional = true }
+graphene-std = { workspace = true, optional = true }
+graph-craft = { workspace = true, optional = true, features = ["loading"] }
+interpreted-executor = { workspace = true, optional = true }
+preprocessor = { workspace = true, optional = true }
+document-container = { workspace = true, optional = true }
+glam = { workspace = true, optional = true }
