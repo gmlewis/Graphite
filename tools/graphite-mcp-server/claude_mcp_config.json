@@ -1,9 +1,11 @@
 {
   "mcpServers": {
     "graphite": {
-      "command": "/Users/glenn/tools/bin/graphite",
-      "args": ["--mcp"],
-      "env": {}
+      "command": "/Users/glenn/tools/bin/graphite-mcp-client",
+      "args": [],
+      "env": {
+        "GRAPHITE_WS_URL": "ws://localhost:8080"
+      }
     }
   }
 }

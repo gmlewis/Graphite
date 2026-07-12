@@ -1,5 +1,21 @@
 # Graphite Editor MCP Server — Implementation Plan
 
+## Architecture Pivot: Blender MCP Pattern
+
+**Decision:** Switch from headless MCP server to the Blender MCP pattern where:
+1. User starts Graphite desktop app first (full GUI, CEF window)
+2. Graphite runs a WebSocket server on localhost (e.g., port 8080)
+3. Lightweight MCP client connects to the WebSocket
+4. Agent talks to MCP client via stdio
+
+**Rationale:**
+- User can see what the agent is doing in real-time (same document)
+- Agent and user can work simultaneously on the same document
+- No CEF bundling issues — user runs the official Graphite app
+- MCP client is lightweight (~1MB) vs. full editor (~71MB)
+
+See `tools/graphite-mcp-server/ARCHITECTURE_PIVOT.md` for full details.
+
 ## Progress
 
 ### Phase 1: Node Catalog Generator ✅
@@ -18,19 +34,17 @@
 - Editor bridge stubs ready for wiring to `Editor::handle_message()`
 - Build: `cd tools/graphite-mcp-server && cargo build` (requires Rust 1.88+ for workspace, or standalone with `rustup run 1.95.0 cargo build`)
 
-### Phase 3: Wire Editor Bridge 🔄 (headed-first)
-- **Architecture decision: headed-first** — MCP server runs in-process within a running editor
-- Editor launched with `--mcp` flag starts MCP server on stdin/stdout alongside GUI
-- MCP server reads JSON-RPC from stdin, dispatches tool calls via `AppEvent::McpToolCall` to main thread
-- Main thread processes tool calls via `DesktopWrapperMessage::FromWeb(Message::...)` dispatch
-- `FrontendMessage` responses converted to MCP tool results
-- Headless mode (standalone binary, no GUI) for catalog-only queries via `--standalone` flag
-- **Working tools (dispatched to editor):** `list_documents`, `create_document`, `delete_selected`, `undo`, `redo`, `activate_tool`, `zoom_to_fit`
-- **Working tools (catalog-only, no editor needed):** `get_node_catalog`, `get_node_details`
-- **Stub tools (return placeholder):** `get_layer_tree`, `create_rectangle/ellipse/line/text`, `select_layer`, `set_fill_color`, `set_stroke`, `set_opacity`, `set_blend_mode`, `move_layer`, `get_selection`, `get_layer_properties`, `get_node_graph`, `set_viewport`
-- **Files modified:** `editor/Cargo.toml` (added `headless` feature), `editor/src/application.rs`, `editor/src/node_graph_executor.rs`, `editor/src/node_graph_executor/runtime_io.rs`, `desktop/Cargo.toml`, `desktop/src/cli.rs`, `desktop/src/lib.rs`, `desktop/src/app.rs`, `desktop/src/event.rs`, `desktop/wrapper/Cargo.toml`
-- **Files created:** `desktop/src/mcp.rs`, `tools/graphite-mcp-server/src/lib.rs`
-- **Key insight:** MCP thread reads stdin → sends `AppEvent::McpToolCall` with oneshot response channel → main thread dispatches to editor → response sent back via channel
+### Phase 3b: WebSocket MCP Server (Blender Pattern) ✅
+- Added WebSocket server to Graphite desktop (`--mcp-server` flag)
+- Created lightweight MCP client proxy (`graphite-mcp-client`)
+- User starts Graphite first → sees GUI window
+- Agent connects via MCP client → both see same document in real-time
+- **Files created:** `desktop/src/mcp_server.rs`, `tools/graphite-mcp-client/`
+- **Usage:**
+  1. User runs: `./run.sh` (starts Graphite with MCP server)
+  2. Graphite window opens (user can see everything)
+  3. Agent connects via `graphite-mcp-client` (lightweight proxy)
+  4. Both work on the same document simultaneously
 
 ### Phase 4: Expand Tool Set ✅
 - Implemented all message-dispatch tools:

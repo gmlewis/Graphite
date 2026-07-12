@@ -56,6 +56,8 @@ pub(crate) struct App {
 	exit_reason: ExitReason,
 	#[cfg(feature = "mcp")]
 	mcp_handle: Option<crate::mcp::McpHandle>,
+	#[cfg(feature = "mcp")]
+	mcp_server_handle: Option<crate::mcp_server::McpServerHandle>,
 }
 
 impl App {
@@ -73,6 +75,7 @@ impl App {
 		preferences: Preferences,
 		launch_documents: Vec<PathBuf>,
 		#[cfg(feature = "mcp")] start_mcp: bool,
+		#[cfg(feature = "mcp")] mcp_server_port: Option<u16>,
 	) -> Self {
 		let ctrlc_app_event_scheduler = app_event_scheduler.clone();
 		ctrlc::set_handler(move || {
@@ -123,7 +126,7 @@ impl App {
 			pointer_lock_position: None,
 			ui_scale: 1.,
 			app_event_receiver,
-			app_event_scheduler,
+			app_event_scheduler: app_event_scheduler.clone(),
 			desktop_wrapper,
 			cef_context,
 			cef_schedule: Some(Instant::now()),
@@ -143,6 +146,10 @@ impl App {
 			} else {
 				None
 			},
+			#[cfg(feature = "mcp")]
+			mcp_server_handle: mcp_server_port.map(|port| {
+				crate::mcp_server::start(port, app_event_scheduler.clone())
+			}),
 		}
 	}
 

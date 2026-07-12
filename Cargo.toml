@@ -34,6 +34,7 @@ members = [
 	"tools/editor-message-tree",
 	"tools/node-docs",
 	"tools/graphite-mcp-server",
+	"tools/graphite-mcp-client",
 ]
 default-members = [
 	"editor",

@@ -19,6 +19,8 @@ mod event;
 mod gpu_context;
 #[cfg(feature = "mcp")]
 mod mcp;
+#[cfg(feature = "mcp")]
+mod mcp_server;
 mod persist;
 mod preferences;
 mod render;
@@ -32,13 +34,14 @@ pub fn start() {
 
 	let cli = Cli::parse();
 
-	// In MCP mode, start headless (no window, no CEF) — just the MCP server on stdin/stdout
+	// In MCP headless mode, start the lightweight MCP server on stdin/stdout
 	#[cfg(feature = "mcp")]
 	if cli.mcp {
 		start_mcp_headless();
 		return;
 	}
 
+	// In MCP server mode, try CEF but fall back to NullCefContext if it fails
 	let cef_context_builder = cef::CefContextBuilder::<CefHandler>::new();
 
 	let cef_context_builder = cef::CefContextBuilder::<CefHandler>::new();
@@ -130,6 +133,8 @@ pub fn start() {
 		cli.files,
 		#[cfg(feature = "mcp")]
 		cli.mcp,
+		#[cfg(feature = "mcp")]
+		if cli.mcp_server { Some(cli.mcp_port) } else { None },
 	);
 
 	let exit_reason = app.run(event_loop);

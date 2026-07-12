@@ -1,0 +1,16 @@
+[package]
+name = "graphite-mcp-client"
+version = "0.1.0"
+description = "Lightweight MCP client proxy for Graphite"
+edition = "2021"
+
+[[bin]]
+name = "graphite-mcp-client"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["macros", "io-std", "io-util", "rt", "rt-multi-thread"] }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+serde_json = "1"
+anyhow = "1"
