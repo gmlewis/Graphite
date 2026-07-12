@@ -115,7 +115,7 @@ impl McpServer {
                 let tool_name = req.params.get("name").and_then(|v| v.as_str()).unwrap_or("");
                 let arguments = req.params.get("arguments").cloned().unwrap_or(Value::Object(serde_json::Map::new()));
 
-                match tools::call_tool(tool_name, arguments) {
+                match tools::call_tool_async(tool_name, arguments).await {
                     Ok(content) => Some(JsonRpcResponse {
                         jsonrpc: "2.0".into(),
                         id: req.id,

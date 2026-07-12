@@ -91,6 +91,7 @@ pub async fn dispatch_tool_call(name: &str, args: Value) -> Result<Vec<ToolConte
         "activate_tool" => activate_tool(&args).await,
         "zoom_to_fit" => zoom_to_fit(&args).await,
         "set_viewport" => set_viewport(&args).await,
+        "show_editor" => show_editor(&args).await,
         _ => Err(anyhow::anyhow!("Unknown tool: {}", name)),
     }
 }
@@ -352,4 +353,53 @@ async fn zoom_to_fit(_args: &Value) -> Result<Vec<ToolContent>> {
 
 async fn set_viewport(args: &Value) -> Result<Vec<ToolContent>> {
     send_editor_command("set_viewport", args.clone()).await
+}
+
+/// Open the Graphite editor window so the user can see the current document.
+/// Finds the graphite binary and launches it in GUI mode.
+async fn show_editor(_args: &Value) -> Result<Vec<ToolContent>> {
+    // Find the graphite binary - try common locations
+    let graphite_bin = which_graphite_binary()
+        .ok_or_else(|| anyhow::anyhow!(
+            "Could not find graphite binary. Ensure 'graphite' is in your PATH or at ~/tools/bin/graphite"
+        ))?;
+
+    // Launch graphite without --mcp to show the GUI
+    match std::process::Command::new(&graphite_bin)
+        .spawn()
+    {
+        Ok(_) => Ok(vec![ToolContent::Text {
+            text: "Graphite editor window is opening. The user can now see and interact with the document.".to_string(),
+        }]),
+        Err(e) => Err(anyhow::anyhow!("Failed to launch Graphite: {e}")),
+    }
+}
+
+fn which_graphite_binary() -> Option<String> {
+    // Check ~/tools/bin/graphite first
+    let home = std::env::var("HOME").unwrap_or_default();
+    let tools_bin = format!("{}/tools/bin/graphite", home);
+    if std::path::Path::new(&tools_bin).exists() {
+        return Some(tools_bin);
+    }
+
+    // Check PATH via `which`
+    if let Ok(output) = std::process::Command::new("which").arg("graphite").output() {
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !path.is_empty() {
+            return Some(path);
+        }
+    }
+
+    // Check current exe's directory (same dir as graphite-mcp)
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let sibling = dir.join("graphite");
+            if sibling.exists() {
+                return Some(sibling.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    None
 }

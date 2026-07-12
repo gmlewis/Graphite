@@ -348,6 +348,14 @@ pub fn list_tools() -> Vec<Tool> {
                 }
             }),
         },
+        Tool {
+            name: "show_editor".into(),
+            description: "Open the Graphite editor window so the user can see the current document. Use this after making changes to let the user view and interact with the result.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {}
+            }),
+        },
     ]
 }
 

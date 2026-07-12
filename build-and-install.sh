@@ -23,17 +23,23 @@ echo ""
 mkdir -p "$INSTALL_DIR"
 
 cp target/release/graphite "$INSTALL_DIR/graphite"
-echo "Installed: $INSTALL_DIR/graphite"
-
 cp target/release/graphite-mcp "$INSTALL_DIR/graphite-mcp"
+echo "Installed: $INSTALL_DIR/graphite"
 echo "Installed: $INSTALL_DIR/graphite-mcp"
+
+# Ad-hoc codesign so macOS doesn't kill the process
+echo ""
+echo "Signing binaries..."
+codesign --force --sign - "$INSTALL_DIR/graphite"
+codesign --force --sign - "$INSTALL_DIR/graphite-mcp"
+echo "  ✓ codesigned"
 
 echo ""
 echo "Done! Installed to $INSTALL_DIR"
 echo ""
 echo "Usage:"
-echo "  graphite --mcp          # Launch editor with MCP server on stdin/stdout"
-echo "  graphite-mcp --standalone  # Catalog-only MCP server (no editor)"
+echo "  graphite --mcp          # Launch headless MCP server (no window)"
+echo "  graphite-mcp --standalone  # Catalog-only MCP server"
 echo ""
 echo "Make sure $INSTALL_DIR is in your PATH:"
 echo "  export PATH=\"\$HOME/tools/bin:\$PATH\""

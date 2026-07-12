@@ -1,5 +1,6 @@
 use crate::app::App;
 use crate::cef::CefHandler;
+use crate::cef::{CefContext, NullCefContext};
 use crate::cli::Cli;
 use crate::consts::APP_LOCK_FILE_NAME;
 use crate::event::CreateAppEventSchedulerEventLoopExt;
@@ -29,6 +30,17 @@ pub(crate) mod consts;
 pub fn start() {
 	tracing_subscriber::fmt().with_env_filter(EnvFilter::from_default_env()).init();
 
+	let cli = Cli::parse();
+
+	// In MCP mode, start headless (no window, no CEF) — just the MCP server on stdin/stdout
+	#[cfg(feature = "mcp")]
+	if cli.mcp {
+		start_mcp_headless();
+		return;
+	}
+
+	let cef_context_builder = cef::CefContextBuilder::<CefHandler>::new();
+
 	let cef_context_builder = cef::CefContextBuilder::<CefHandler>::new();
 
 	if cef_context_builder.is_sub_process() {
@@ -38,8 +50,6 @@ pub fn start() {
 		tracing::warn!("Cef subprocess failed with error: {error}");
 		return;
 	}
-
-	let cli = Cli::parse();
 
 	let Ok(lock_file) = std::fs::OpenOptions::new()
 		.read(true)
@@ -99,24 +109,19 @@ pub fn start() {
 	}
 
 	let cef_handler = cef::CefHandler::new(app_event_scheduler.clone(), cef_view_info_receiver);
-	let cef_context = match cef_context_builder.create(cef_handler, wgpu_context.clone(), prefs.disable_ui_acceleration) {
+	let cef_context: Box<dyn CefContext> = match cef_context_builder.create(cef_handler, wgpu_context.clone(), prefs.disable_ui_acceleration) {
 		Ok(context) => {
 			tracing::info!("CEF initialized successfully");
-			context
+			Box::new(context)
 		}
-		Err(cef::InitError::InitializationFailureCode(code)) => {
-			panic!("CEF initialization failed with code: {code}");
-		}
-		Err(cef::InitError::BrowserCreationFailed) => {
-			panic!("Failed to create CEF browser");
-		}
-		Err(cef::InitError::RequestContextCreationFailed) => {
-			panic!("Failed to create CEF request context");
+		Err(e) => {
+			tracing::warn!("CEF initialization failed: {e} — running without web UI");
+			Box::new(NullCefContext)
 		}
 	};
 
 	let app = App::new(
-		Box::new(cef_context),
+		cef_context,
 		cef_view_info_sender,
 		wgpu_context,
 		app_event_receiver,
@@ -167,4 +172,18 @@ pub fn start_helper() {
 	let cef_context_builder = cef::CefContextBuilder::<CefHandler>::new_helper();
 	assert!(cef_context_builder.is_sub_process());
 	cef_context_builder.execute_sub_process();
+}
+
+/// Start in MCP headless mode: no window, no CEF, just the MCP server on stdin/stdout.
+/// The agent calls tools to modify documents, then calls `show_editor` to open the GUI.
+#[cfg(feature = "mcp")]
+fn start_mcp_headless() {
+	tracing::info!("Starting MCP headless mode (no window)");
+
+	let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+	runtime.block_on(async {
+		if let Err(e) = graphite_mcp_server::run_standalone().await {
+			tracing::error!("MCP server error: {e}");
+		}
+	});
 }

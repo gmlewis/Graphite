@@ -34,9 +34,27 @@ impl<H: CefEventHandler> CefContextBuilder<H> {
 	fn new_impl(helper: bool) -> Self {
 		#[cfg(target_os = "macos")]
 		let _loader = {
-			let loader = cef::library_loader::LibraryLoader::new(&std::env::current_exe().unwrap(), helper);
-			assert!(loader.load());
-			loader
+			// Try to load CEF framework. In MCP mode without a .app bundle, this may fail.
+			// We catch the panic and continue — the editor will still work but without the web UI.
+			let result = std::panic::catch_unwind(|| {
+				let loader = cef::library_loader::LibraryLoader::new(&std::env::current_exe().unwrap(), helper);
+				if loader.load() {
+					Some(loader)
+				} else {
+					None
+				}
+			});
+			match result {
+				Ok(Some(loader)) => Some(loader),
+				Ok(None) => {
+					tracing::warn!("CEF framework not found — running without web UI");
+					None
+				}
+				Err(_) => {
+					tracing::warn!("CEF framework not found — running without web UI");
+					None
+				}
+			}
 		};
 		#[cfg(not(target_os = "macos"))]
 		let _ = helper;

@@ -33,7 +33,7 @@ mod platform;
 mod utility;
 mod view;
 
-pub(crate) use context::{CefContext, CefContextBuilder, InitError};
+pub(crate) use context::{CefContext, CefContextBuilder, InitError, NullCefContext};
 pub(crate) use view::View;
 
 pub(crate) trait CefEventHandler: Send + Sync + 'static {
