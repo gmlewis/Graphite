@@ -2187,7 +2187,6 @@ dependencies = [
 name = "graphite-desktop"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "bytemuck",
  "cef",
  "cef-dll-sys",
@@ -2197,14 +2196,9 @@ dependencies = [
  "dirs",
  "fd-lock",
  "futures",
- "futures-util",
  "glam",
- "graph-craft",
- "graphene-std",
  "graphite-desktop-embedded-resources",
  "graphite-desktop-wrapper",
- "graphite-editor",
- "graphite-mcp-server",
  "interprocess",
  "lzma-rust2",
  "muda",
@@ -2219,7 +2213,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
- "tokio-tungstenite",
  "tracing",
  "tracing-subscriber",
  "vello",
@@ -2343,26 +2336,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-tungstenite",
-]
-
-[[package]]
-name = "graphite-mcp-server"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "clap",
- "document-container",
- "env_logger",
- "glam",
- "graph-craft",
- "graphene-std",
- "graphite-editor",
- "interpreted-executor",
- "log",
- "preprocessor",
- "serde",
- "serde_json",
- "tokio",
 ]
 
 [[package]]

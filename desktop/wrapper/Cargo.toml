@@ -10,7 +10,6 @@ rust-version = "1.87"
 
 [features]
 gpu = ["graphite-editor/gpu", "graphene-std/shader-nodes"]
-headless = ["graphite-editor/headless"]
 
 [dependencies]
 # Local dependencies

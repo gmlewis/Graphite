@@ -17,10 +17,6 @@ mod cli;
 mod dirs;
 mod event;
 mod gpu_context;
-#[cfg(feature = "mcp")]
-mod mcp;
-#[cfg(feature = "mcp")]
-mod mcp_server;
 mod persist;
 mod preferences;
 mod render;
@@ -33,16 +29,6 @@ pub fn start() {
 	tracing_subscriber::fmt().with_env_filter(EnvFilter::from_default_env()).init();
 
 	let cli = Cli::parse();
-
-	// In MCP headless mode, start the lightweight MCP server on stdin/stdout
-	#[cfg(feature = "mcp")]
-	if cli.mcp {
-		start_mcp_headless();
-		return;
-	}
-
-	// In MCP server mode, try CEF but fall back to NullCefContext if it fails
-	let cef_context_builder = cef::CefContextBuilder::<CefHandler>::new();
 
 	let cef_context_builder = cef::CefContextBuilder::<CefHandler>::new();
 
@@ -131,10 +117,6 @@ pub fn start() {
 		app_event_scheduler,
 		prefs,
 		cli.files,
-		#[cfg(feature = "mcp")]
-		cli.mcp,
-		#[cfg(feature = "mcp")]
-		if cli.mcp_server { Some(cli.mcp_port) } else { None },
 	);
 
 	let exit_reason = app.run(event_loop);
@@ -177,18 +159,4 @@ pub fn start_helper() {
 	let cef_context_builder = cef::CefContextBuilder::<CefHandler>::new_helper();
 	assert!(cef_context_builder.is_sub_process());
 	cef_context_builder.execute_sub_process();
-}
-
-/// Start in MCP headless mode: no window, no CEF, just the MCP server on stdin/stdout.
-/// The agent calls tools to modify documents, then calls `show_editor` to open the GUI.
-#[cfg(feature = "mcp")]
-fn start_mcp_headless() {
-	tracing::info!("Starting MCP headless mode (no window)");
-
-	let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-	runtime.block_on(async {
-		if let Err(e) = graphite_mcp_server::run_standalone().await {
-			tracing::error!("MCP server error: {e}");
-		}
-	});
 }

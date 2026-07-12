@@ -1106,10 +1106,7 @@ fn mcp_tool_handler(wrapper: &EditorWrapper, tool_name: &str, args: &serde_json:
 
 	let result = match tool_name {
 		"get_node_catalog" | "get_node_details" => {
-			// These are catalog-only tools that don't need the editor
-			serde_json::json!({
-				"content": [{"type": "text", "text": "Node catalog tools are available via the standalone MCP server. Use 'cargo run -p graphite-mcp-server' for catalog queries."}]
-			})
+			serde_json::json!({"content": [{"type": "text", "text": "Error: Node catalog tools are not available through the browser relay. The node catalog requires the standalone graphite-mcp-server binary which has been removed from this project."}], "isError": true})
 		}
 
 		"create_document" => {
@@ -1119,8 +1116,27 @@ fn mcp_tool_handler(wrapper: &EditorWrapper, tool_name: &str, args: &serde_json:
 		}
 
 		"list_documents" => {
-			if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::UpdateOpenDocumentsList)) { return err; }
-			serde_json::json!({"content": [{"type": "text", "text": "Document list updated in UI"}]})
+			// Redirect to get_document_info behavior — list_documents is deprecated.
+			let info = with_editor(&|editor| {
+				match editor.active_document() {
+					Some(doc) => {
+						let metadata = doc.metadata();
+						let network = &doc.network_interface;
+						let all_layers: Vec<_> = metadata.all_layers().collect();
+						let layer_count = all_layers.len();
+						let artboard_count = all_layers.iter().filter(|l| network.is_artboard(&l.to_node(), &[])).count();
+						let selected = doc.network_interface.selected_nodes();
+						let selected_count = selected.selected_layers(metadata).count();
+						let out = format!(
+							"# Document Info\n\n- **Name:** {}\n- **Layers:** {}\n- **Artboards:** {}\n- **Selected:** {}\n- **Has content:** {}",
+							doc.name, layer_count, artboard_count, selected_count, layer_count > 0
+						);
+						serde_json::json!(out)
+					}
+					None => serde_json::json!("No active document"),
+				}
+			});
+			serde_json::json!({"content": [{"type": "text", "text": info}]})
 		}
 
 		"get_layer_tree" => {
@@ -1295,12 +1311,47 @@ fn mcp_tool_handler(wrapper: &EditorWrapper, tool_name: &str, args: &serde_json:
 			serde_json::json!({"content": [{"type": "text", "text": "Redone"}]})
 		}
 
-		"set_fill_color" => {
+		"set_fill_opacity" => {
 			let opacity = args.get("opacity").and_then(|v| v.as_f64()).unwrap_or(100.);
 			if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::SetFillForSelectedLayers {
 				fill: opacity / 100.,
 			}))) { return err; }
 			serde_json::json!({"content": [{"type": "text", "text": format!("Set fill opacity to {opacity}%")}]})
+		}
+
+		"set_fill_color" => {
+			let color_str = args.get("color").and_then(|v| v.as_str()).unwrap_or("#000000");
+			let hex = color_str.trim().trim_start_matches('#');
+			let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0) as f32 / 255.;
+			let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(0) as f32 / 255.;
+			let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0) as f32 / 255.;
+			let a = if hex.len() >= 8 { u8::from_str_radix(&hex[6..8], 16).unwrap_or(255) as f32 / 255. } else { 1. };
+			let color = Color::from_rgbaf32_unchecked(r, g, b, a);
+
+			let layer_id_num: Option<u64> = {
+				let val = with_editor(&|editor| {
+					editor.active_document()
+						.and_then(|doc| {
+							let metadata = doc.metadata();
+							doc.network_interface.selected_nodes().selected_layers(metadata).next()
+						})
+						.map(|l| l.to_node().0)
+						.map(|n| serde_json::json!(n))
+						.unwrap_or(serde_json::json!(null))
+				});
+				val.as_u64()
+			};
+
+			if let Some(id) = layer_id_num {
+				let layer = LayerNodeIdentifier::new_unchecked(NodeId(id));
+				if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::GraphOperation(GraphOperationMessage::FillColorSet {
+					layer,
+					color: Some(color),
+				})))) { return err; }
+				serde_json::json!({"content": [{"type": "text", "text": format!("Set fill color to {color_str}")}]})
+			} else {
+				serde_json::json!({"content": [{"type": "text", "text": "No layer selected"}], "isError": true})
+			}
 		}
 
 		"set_opacity" => {
@@ -1313,9 +1364,13 @@ fn mcp_tool_handler(wrapper: &EditorWrapper, tool_name: &str, args: &serde_json:
 
 		"set_blend_mode" => {
 			let mode = args.get("blend_mode").and_then(|v| v.as_str()).unwrap_or("Normal");
+			let blend_mode: graphene_std::raster::BlendMode = match serde_json::from_value(serde_json::Value::String(mode.to_string())) {
+				Ok(bm) => bm,
+				Err(_) => return serde_json::to_string(&serde_json::json!({"content": [{"type": "text", "text": format!("Unknown blend mode: {mode}")}], "isError": true})).unwrap(),
+			};
 			if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::SetBlendModeForSelectedLayers {
-				blend_mode: graphene_std::raster::BlendMode::Normal,
-			}))) { return err; }
+				blend_mode,
+			})))) { return err; }
 			serde_json::json!({"content": [{"type": "text", "text": format!("Set blend mode to {mode}")}]})
 		}
 
@@ -1430,8 +1485,13 @@ fn mcp_tool_handler(wrapper: &EditorWrapper, tool_name: &str, args: &serde_json:
 
 		"set_viewport" => {
 			let zoom = args.get("zoom").and_then(|v| v.as_f64());
+			let pan_x = args.get("pan_x").and_then(|v| v.as_f64());
+			let pan_y = args.get("pan_y").and_then(|v| v.as_f64());
 			if let Some(zf) = zoom {
 				if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::Navigation(NavigationMessage::CanvasZoomSet { zoom_factor: zf })))) { return err; }
+			}
+			if let (Some(dx), Some(dy)) = (pan_x, pan_y) {
+				if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::Navigation(NavigationMessage::CanvasPan { delta: glam::DVec2::new(dx, dy) })))) { return err; }
 			}
 			serde_json::json!({"content": [{"type": "text", "text": "Viewport updated"}]})
 		}
@@ -1615,63 +1675,75 @@ fn mcp_tool_handler(wrapper: &EditorWrapper, tool_name: &str, args: &serde_json:
 			};
 			let count = shapes.len();
 			let mut errors: Vec<String> = Vec::new();
+			let mut svg_elements: Vec<String> = Vec::new();
+			let mut max_x = 0.0_f64;
+			let mut max_y = 0.0_f64;
+
 			for (i, shape) in shapes.iter().enumerate() {
 				let shape_type = shape.get("type").and_then(|v| v.as_str()).unwrap_or("rectangle");
 				let x = shape.get("x").and_then(|v| v.as_f64()).unwrap_or(0.);
 				let y = shape.get("y").and_then(|v| v.as_f64()).unwrap_or(0.);
 				let fill = shape.get("fill_color").and_then(|v| v.as_str()).unwrap_or("#000000");
-				let svg_result = match shape_type {
+				let elem = match shape_type {
 					"rectangle" => {
 						let w = shape.get("width").and_then(|v| v.as_f64()).unwrap_or(100.);
 						let h = shape.get("height").and_then(|v| v.as_f64()).unwrap_or(100.);
 						let r = shape.get("corner_radius").and_then(|v| v.as_f64()).unwrap_or(0.);
-						let svg_w = x + w;
-						let svg_h = y + h;
-						format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="{svg_w}" height="{svg_h}"><rect x="{x}" y="{y}" width="{w}" height="{h}" rx="{r}" fill="{fill}"/></svg>"#)
+						max_x = max_x.max(x + w);
+						max_y = max_y.max(y + h);
+						format!(r#"<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="{r}" fill="{fill}"/>"#)
 					}
 					"ellipse" => {
 						let rx = shape.get("radius_x").and_then(|v| v.as_f64()).unwrap_or(50.);
 						let ry = shape.get("radius_y").and_then(|v| v.as_f64()).unwrap_or(50.);
-						let svg_w = x + rx;
-						let svg_h = y + ry;
-						format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="{svg_w}" height="{svg_h}"><ellipse cx="{x}" cy="{y}" rx="{rx}" ry="{ry}" fill="{fill}"/></svg>"#)
+						max_x = max_x.max(x + rx);
+						max_y = max_y.max(y + ry);
+						format!(r#"<ellipse cx="{x}" cy="{y}" rx="{rx}" ry="{ry}" fill="{fill}"/>"#)
 					}
 					"line" => {
 						let x2 = shape.get("x2").and_then(|v| v.as_f64()).unwrap_or(x + 100.);
 						let y2 = shape.get("y2").and_then(|v| v.as_f64()).unwrap_or(y + 100.);
 						let stroke_color = shape.get("stroke_color").and_then(|v| v.as_str()).unwrap_or(fill);
 						let sw = shape.get("stroke_width").and_then(|v| v.as_f64()).unwrap_or(2.);
-						let svg_w = x.max(x2) + sw;
-						let svg_h = y.max(y2) + sw;
-						format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="{svg_w}" height="{svg_h}"><line x1="{x}" y1="{y}" x2="{x2}" y2="{y2}" stroke="{stroke_color}" stroke-width="{sw}"/></svg>"#)
+						max_x = max_x.max(x.max(x2) + sw);
+						max_y = max_y.max(y.max(y2) + sw);
+						format!(r#"<line x1="{x}" y1="{y}" x2="{x2}" y2="{y2}" stroke="{stroke_color}" stroke-width="{sw}"/>"#)
 					}
 					"text" => {
 						let content = shape.get("text").and_then(|v| v.as_str()).unwrap_or("Text");
 						let font_size = shape.get("font_size").and_then(|v| v.as_f64()).unwrap_or(24.);
 						let est_w = content.len() as f64 * font_size * 0.6;
-						let svg_w = x + est_w;
-						let svg_h = y + font_size * 1.2;
-						format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="{svg_w}" height="{svg_h}"><text x="{x}" y="{y}" font-size="{font_size}" font-family="sans-serif" fill="{fill}">{content}</text></svg>"#)
+						max_x = max_x.max(x + est_w);
+						max_y = max_y.max(y + font_size * 1.2);
+						format!(r#"<text x="{x}" y="{y}" font-size="{font_size}" font-family="sans-serif" fill="{fill}">{content}</text>"#)
 					}
 					_ => {
 						errors.push(format!("Shape {i}: unknown type '{shape_type}'"));
 						continue;
 					}
 				};
+				svg_elements.push(elem);
+			}
+
+			if svg_elements.is_empty() {
+				serde_json::json!({"content": [{"type": "text", "text": format!("No valid shapes. Errors: {}", errors.join("; "))}], "isError": true})
+			} else {
+				let svg = format!(
+					r#"<svg xmlns="http://www.w3.org/2000/svg" width="{max_x}" height="{max_y}">{}</svg>"#,
+					svg_elements.join("")
+				);
 				if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::InsertSvg {
-					name: Some(format!("Batch {i}")),
-					svg: svg_result,
+					name: Some(format!("Batch ({count} shapes)")),
+					svg,
 					mouse: None,
 					parent_and_insert_index: None,
 					place_at_origin: true,
-				}))) {
-					errors.push(format!("Shape {i}: {err}"));
+				}))) { return err; }
+				if errors.is_empty() {
+					serde_json::json!({"content": [{"type": "text", "text": format!("Created {count} shapes in 1 layer group")}]})
+				} else {
+					serde_json::json!({"content": [{"type": "text", "text": format!("Created {} shapes in 1 layer group. Errors: {}", count - errors.len(), errors.join("; "))}]})
 				}
-			}
-			if errors.is_empty() {
-				serde_json::json!({"content": [{"type": "text", "text": format!("Created {count} shapes successfully")}]})
-			} else {
-				serde_json::json!({"content": [{"type": "text", "text": format!("Created {} shapes. Errors: {}", count - errors.len(), errors.join("; "))}], "isError": errors.len() == count})
 			}
 		}
 
