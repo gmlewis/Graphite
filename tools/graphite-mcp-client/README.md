@@ -65,50 +65,93 @@ Example for opencode (`~/.config/opencode/opencode.json`):
 The relay defaults to WebSocket port 8081. Override with the
 `GRAPHITE_MCP_PORT` environment variable if needed.
 
-## Requirements / Agent Guidance
+## Agent guidance: how to use these tools efficiently
 
-These are the rules an agent **must** follow to avoid timeouts and errors:
+These rules are derived from real-world usage. Following them prevents timeouts,
+excessive layer counts, and failed operations.
 
-1. **The browser must be connected.** The relay returns a `-32000` error
-   ("Graphite web app is not connected") if no browser tab is open and
-   registered with `mcp-bridge.ts`. If you see this, ask the user to open
-   <http://localhost:8080> and wait a few seconds before retrying. Do **not**
-   retry in a tight loop — that wastes the 15-second timeout budget.
+### Workflow
 
-2. **Tool calls are synchronous and have a 15-second timeout** (enforced in
-   `graphite-mcp-client/src/main.rs`). Long operations will fail with error
-   code `-32001`. Avoid issuing many tool calls in rapid parallel batches;
-   prefer the batch tools (`batch_create`, `import_svg`) over hundreds of
-   individual `create_rectangle` calls.
+1. **Start with `get_document_info`.** If it says "No active document", call
+   `create_document`. Never call `list_documents` — it only refreshes the UI
+   and returns no data.
 
-3. **Prefer batch tools.** `batch_create`, `import_svg`, and `create_path`
-   are the efficient way to build complex artwork. Issuing hundreds of
-   single-shape calls one-by-one is slow and will hit the timeout.
+2. **Plan your artwork as SVG.** Think in SVG elements (`<rect>`, `<circle>`,
+   `<path>`, `<g>`, gradients). Build the SVG string and import it with one
+   `import_svg` call. This creates a single layer group containing all
+   elements — the most efficient approach.
 
-4. **`list_documents` only refreshes the UI document list** — it does *not*
-   return a list of documents. To inspect the active document, use
-   `get_document_info` instead.
+3. **For complex curves** (mathematical curves, spirographs, flow fields,
+   Lissajous figures), use `create_path` for individual curves or include
+   `<path>` elements in your `import_svg` SVG. A single path can have hundreds
+   of points and still create only one layer.
 
-5. **There is exactly one active document.** Tools operate on the active
-   document. Use `create_document` to make a new one, then `get_document_info`
-   to confirm it is active.
+4. **Read back what you built** with `get_layer_tree` or `get_selected_layer_info`
+   to get real layer IDs before calling `select_layer` / `set_stroke` / etc.
 
-6. **Layer IDs are integers** (e.g. `42`), not GUID strings. They come from
-   `get_layer_tree`, `get_selection`, or the `Created ...` responses of the
-   create tools. Pass them as a number or a numeric string.
+5. **Call `zoom_to_fit`** after creating content so the user can see the result.
 
-7. **`set_fill_color` sets fill OPACITY (0–100), not a color.** Despite the
-   name, it dispatches `SetFillForSelectedLayers { fill: opacity/100 }`.
-   There is currently no tool to set the fill *color* by hex value via this
-   interface; use `import_svg` / `create_path` / `batch_create` with a
-   `fill_color` field to create filled shapes. (Naming is a known wart —
-   tracked separately.)
+### Tool efficiency hierarchy
 
-8. **`get_node_catalog` and `get_node_details` return a pointer message**
-   when called through this relay, because the node catalog lives in the
-   standalone `graphite-mcp-server` binary. They are listed here for
-   completeness but are not the useful way to query nodes through the
-   browser bridge.
+```
+import_svg     ← 1 call, 1 layer group, unlimited elements. BEST.
+create_path    ← 1 call, 1 layer, 1 complex curve (hundreds of points OK).
+batch_create   ← 1 call, N shapes, N layers. OK for ≤10 shapes.
+create_*       ← 1 call, 1 shape, 1 layer. Fine for a few shapes only.
+```
+
+### Critical limitations
+
+- **`batch_create` creates one layer per shape.** Each shape in the array is
+  internally dispatched as a separate `InsertSvg` message, creating a separate
+  layer. With 169 shapes, you get 169 layers. The browser slows down
+  dramatically past ~200 layers, causing timeouts even on simple read calls.
+  **Keep `batch_create` to ≤10 shapes per call**, and prefer `import_svg` for
+  anything larger.
+
+- **The browser slows down past ~200 layers.** If your document accumulates
+  200+ layers (e.g. from many `batch_create` or `create_*` calls), even
+  `get_document_info` may take longer. Start a new document with
+  `create_document` rather than trying to delete layers one by one.
+
+- **Tool call argument size is limited by the agent's context window.** The
+  agent cannot inline more than ~20KB of data in a single tool-call parameter.
+  A single `import_svg` call with a ~20KB SVG string works well. For larger
+  artwork, split into multiple `import_svg` calls (each creates one layer
+  group) or use `create_path` for individual complex curves.
+
+- **Never issue tool calls in parallel.** The relay serializes stdin→WebSocket,
+  but the browser handles them one at a time; parallel calls interleave
+  responses and cause timeouts. Always call sequentially.
+
+- **`set_fill_color` sets fill OPACITY (0–100), not a color.** Despite the name,
+  it dispatches `SetFillForSelectedLayers { fill: opacity/100 }`. There is no
+  tool to change the fill color of an existing layer — set `fill_color` in the
+  SVG when creating the shape.
+
+- **`set_blend_mode` always dispatches Normal.** This is a known implementation
+  limitation (see `editor_wrapper.rs`).
+
+- **`list_documents` is useless.** It returns `"Document list updated in UI"`
+  — not a list. Use `get_document_info` instead.
+
+- **`get_node_catalog` / `get_node_details` return a pointer message** through
+  the browser relay. They require the standalone `graphite-mcp-server` binary.
+  Do not call them for drawing tasks.
+
+### Timeout behaviour
+
+Tool calls have a **5-second timeout**. Every editor command should complete in
+well under 1 second. The relay matches responses to requests by JSON-RPC `id`,
+so a timed-out call cannot poison subsequent calls — its late reply is silently
+discarded. If you see `-32001` errors, the browser is likely stuck (too many
+layers) or disconnected.
+
+### Layer IDs
+
+Layer IDs are integers (e.g. `42`), not GUID strings. They come from
+`get_layer_tree`, `get_selection`, `get_selected_layer_info`, or are implied by
+the creation order. Pass them as a number or a numeric string.
 
 ## Tool reference (30 tools)
 
@@ -117,60 +160,74 @@ The authoritative tool list is defined in
 `frontend/wrapper/src/editor_wrapper.rs` (`mcp_tool_handler`). If you change
 one, change the other.
 
+### Recommended workflow for complex artwork
+
+The most efficient way to build complex artwork:
+
+1. `get_document_info` — confirm a document exists
+2. `create_document` — if needed
+3. `import_svg` — import a single SVG with many elements (creates 1 layer group)
+4. `create_path` — add individual complex curves if needed (1 layer each)
+5. `zoom_to_fit` — show the user the result
+
+**Avoid** `batch_create` and `create_*` for complex artwork — they create one
+layer per shape and slow the browser down past ~200 layers. Use them only for
+a handful of simple shapes.
+
 ### Inspection (read-only)
 
 | Tool | Args | Returns | Notes |
 |------|------|---------|-------|
-| `get_document_info` | — | name, layer/artboard/selection counts | Use this first to orient. |
-| `get_layer_tree` | — | markdown list of all layers with IDs, kind, visibility, lock | Flat list, not nested. |
+| `get_document_info` | — | name, layer/artboard/selection counts | **Call this first.** Tells you if a document exists and how many layers it has. |
+| `get_layer_tree` | — | markdown list of all layers with IDs, kind, visibility, lock | Flat list, not nested. Use to discover layer IDs. |
 | `get_selection` | — | selected layer IDs + names | |
-| `get_selected_layer_info` | — | per-layer bounds, visibility, lock | Richer than `get_selection`. |
+| `get_selected_layer_info` | — | per-layer bounds, visibility, lock | Richer than `get_selection` — includes bounding boxes. |
 | `get_layer_properties` | `layer_id` | name, kind, visible, locked | |
-| `get_layer_bounds` | `layer_id` | min/max XY and size | |
-| `get_node_graph` | `layer_id` | node implementation + inputs dump | |
-| `list_documents` | — | `"Document list updated in UI"` | **Does NOT return a list** — use `get_document_info`. |
+| `get_layer_bounds` | `layer_id` | min/max XY and size | Useful for layout calculations. |
+| `get_node_graph` | `layer_id` | node implementation + inputs dump | Advanced inspection. |
+| `list_documents` | — | `"Document list updated in UI"` | **DEPRECATED — do not use.** Use `get_document_info`. |
 
 ### Creation (write)
 
-| Tool | Key args | Notes |
-|------|----------|-------|
-| `create_document` | `name` | Creates and switches to a new document. |
-| `create_rectangle` | `x, y, width, height, fill_color, corner_radius` | SVG-backed; `fill_color` is hex. |
-| `create_ellipse` | `x, y, radius_x, radius_y, fill_color` | `x,y` is the **center**. |
-| `create_line` | `x1, y1, x2, y2, stroke_color, stroke_width` | |
-| `create_text` | `x, y, text, font_size, fill_color` | Uses the default Graphite font. |
-| `create_path` | `d, fill_color, stroke_color, stroke_width, x, y` | `d` is SVG path data. Most powerful primitive. |
-| `import_svg` | `svg, name` | Full SVG string; placed at document origin. Supports `<rect>`, `<circle>`, `<path>`, `<g>`, `<linearGradient>`, … |
-| `batch_create` | `shapes: [...]` | One call, many shapes. Each item: `{type, ...}` with `type ∈ {rectangle, ellipse, line, text}`. **Use this for complex drawings.** |
+| Tool | Key args | Layers created | Notes |
+|------|----------|----------------|-------|
+| `create_document` | `name` | 0 (empty doc) | Creates and switches to a new document. |
+| `import_svg` | `svg, name` | **1 layer group** regardless of element count | **THE BEST TOOL for complex artwork.** Supports `<rect>`, `<circle>`, `<path>`, `<g>`, gradients, etc. Keep SVG under ~20KB per call. |
+| `create_path` | `d, fill_color, stroke_color, stroke_width, x, y` | **1 layer** | Single complex curve. Hundreds of path points OK. |
+| `batch_create` | `shapes: [...]` | **N layers** (one per shape) | **≤10 shapes per call.** Each shape is a separate InsertSvg internally. Prefer `import_svg` for anything larger. |
+| `create_rectangle` | `x, y, width, height, fill_color, corner_radius` | 1 | For a few shapes only. |
+| `create_ellipse` | `x, y, radius_x, radius_y, fill_color` | 1 | `x,y` is the **center**. |
+| `create_line` | `x1, y1, x2, y2, stroke_color, stroke_width` | 1 | |
+| `create_text` | `x, y, text, font_size, fill_color` | 1 | Default Graphite font. |
 
 ### Modification (operate on the current selection)
 
 | Tool | Key args | Notes |
 |------|----------|-------|
-| `select_layer` | `layer_id` | Replaces the selection. |
+| `select_layer` | `layer_id` | Required before any style/transform tool. Replaces selection. |
 | `delete_selected` | — | |
-| `move_layer` | `dx, dy` | Nudges the current selection in document px. |
-| `set_stroke` | `color, width` | Hex color; operates on the first selected layer. |
-| `set_fill_color` | `opacity` (0–100) | **Sets fill OPACITY, not color** (see guidance above). |
+| `move_layer` | `dx, dy` | Nudges selection in document px. |
+| `set_stroke` | `color, width` | Hex color; first selected layer only. |
+| `set_fill_color` | `opacity` (0–100) | **Sets fill OPACITY, not color.** |
 | `set_opacity` | `opacity` (0–100) | Layer opacity. |
-| `set_blend_mode` | `blend_mode` | One of the 25 BlendMode names (see enum below). |
-| `activate_tool` | `tool` | `Select \| Pen \| Path \| Line \| Rectangle \| Ellipse \| Freehand \| Text \| Fill \| Gradient \| Eyedropper` |
+| `set_blend_mode` | `blend_mode` | **Always dispatches Normal** (known limitation). |
+| `activate_tool` | `tool` | Changes active tool in UI. Does not simulate drawing. |
 
 ### Viewport / history
 
 | Tool | Key args | Notes |
 |------|----------|-------|
-| `zoom_to_fit` | — | Fit all content. |
-| `set_viewport` | `zoom` | Zoom factor only (1.0 = 100%). |
+| `zoom_to_fit` | — | **Always call after creating content.** |
+| `set_viewport` | `zoom` | Zoom factor only (1.0 = 100%). No pan. |
 | `undo` | — | |
 | `redo` | — | |
 
-### Node catalog (limited through the browser bridge)
+### Node catalog (not useful through the browser relay)
 
 | Tool | Args | Notes |
 |------|------|-------|
-| `get_node_catalog` | `category?, search?` | Returns a pointer message via the relay; use the standalone `graphite-mcp-server` binary for real catalog queries. |
-| `get_node_details` | `node_id` | Same caveat. |
+| `get_node_catalog` | `category?, search?` | Returns a pointer message via the relay. Requires standalone `graphite-mcp-server` binary. **Do not call for drawing tasks.** |
+| `get_node_details` | `node_id` | Same caveat. **Do not call for drawing tasks.** |
 
 ## Blend modes
 
@@ -180,31 +237,43 @@ one, change the other.
 `Difference`, `Exclusion`, `Subtract`, `Divide`, `Hue`, `Saturation`,
 `Color`, `Luminosity`.
 
-## Tips for agents building complex artwork
+## Example: building complex generative artwork
 
-- **Start with `get_document_info`** to confirm a document exists and is active.
-  If not, call `create_document`.
-- **Use `import_svg` for intricate vector art.** Construct one SVG string with
-  many `<path>`, `<circle>`, `<rect>` elements and gradients; the WASM editor
-  parses it in one shot. This is far faster and more reliable than issuing
-  hundreds of individual `create_*` calls.
-- **Use `batch_create`** when you need many simple shapes but don't want to
-  hand-write SVG.
-- **Read back what you built** with `get_layer_tree` / `get_selected_layer_info`
-  before styling, so you have real layer IDs.
-- **Don't parallel-fire tool calls.** The relay serializes stdin→WebSocket, but
-  the browser handles them one at a time; parallel calls can interleave
-  responses and starve the 15 s timeout. Issue calls sequentially.
-- **After creating layers, call `zoom_to_fit`** so the user can see the result.
+Here is the recommended pattern for building artwork that would be impossible
+to draw by hand (e.g. a flow-field painting with 150 curved paths, 40 gradient
+rings, mathematical rose curves, epicycloids, and Lissajous overlays):
+
+```
+1. get_document_info              → "No active document"
+2. create_document { name: "..." } → "Document created"
+3. import_svg { svg: "<svg>...50 flow-field <path> elements + 30 <circle> rings...</svg>" }
+   → "SVG imported successfully"   (1 layer group, ~50 paths + 30 circles)
+4. create_path { d: "M...rose curve k=5/3...", stroke_color: "#ffe066" }
+   → "Path created"                (1 layer)
+5. create_path { d: "M...epicycloid...", stroke_color: "#ff00aa" }
+   → "Path created"                (1 layer)
+6. zoom_to_fit                     → "Zoomed to fit"
+```
+
+Total: 6 tool calls, ~4 layers, hundreds of elements. The key insight: put as
+much as possible into the `import_svg` SVG string so it all becomes one layer
+group. Use `create_path` only for individual complex curves that are easier to
+express as standalone path data.
+
+**What NOT to do:** calling `batch_create` with 169 rectangle shapes creates
+169 separate layers and slows the browser to a crawl. Use `import_svg` with
+169 `<rect>` elements instead — same visual result, but only 1 layer.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `-32000 Graphite web app is not connected` | Browser tab not open, or `mcp-bridge.ts` not connected to the relay. | Open <http://localhost:8080>; wait ~2 s. |
-| `-32001 Tool call timed out` | Browser didn't respond in 15 s. | Reduce batch size; avoid parallel calls; check the browser console for errors. |
-| `Editor error: …` modal text | The editor rejected the operation (e.g. no selection). | Read the message; select a layer first. |
+| `-32001 Tool call timed out` | Browser didn't respond in 5 s. Usually means too many layers (>200) or browser is stuck. | Check the browser tab is alive. If the document has >200 layers, create a new document. Reduce `batch_create` batch size to ≤10. Avoid parallel calls. |
+| `Editor error: …` modal text | The editor rejected the operation (e.g. no selection). | Read the message; call `select_layer` with a valid ID first. |
 | `Unknown tool: …` | Tool name typo, or the relay/browser version mismatch. | Check `TOOLS` in `frontend/src/mcp-bridge.ts`. |
+| Tool calls used to work but now all time out | Document has accumulated too many layers and the browser is bogged down. | Call `create_document` to start fresh, or ask the user to reload the browser tab. |
+| `batch_create` works for small batches but times out for large ones | Each shape creates a separate layer; the browser slows with many layers. | Use `import_svg` instead — 1 layer group regardless of element count. |
 
 ## Building from source
 

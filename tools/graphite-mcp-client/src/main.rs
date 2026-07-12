@@ -128,6 +128,12 @@ async fn main() -> Result<()> {
 			continue;
 		}
 
+		// Parse the request id once so every response path (including the
+		// "no browser connected" fast-fail below) can echo it back.
+		let request_id = serde_json::from_str::<serde_json::Value>(&line)
+			.ok()
+			.and_then(|v| v.get("id").cloned());
+
 		// Wait for the browser to connect before forwarding (up to 10 seconds)
 		let mut waited = 0u64;
 		loop {
@@ -157,10 +163,9 @@ async fn main() -> Result<()> {
 
 		if !sent {
 			// No browser connected — return an error response
-			let id = extract_id(&line);
 			let error_response = serde_json::json!({
 				"jsonrpc": "2.0",
-				"id": id,
+				"id": request_id.clone().unwrap_or(serde_json::Value::Null),
 				"error": {
 					"code": -32000,
 					"message": "Graphite web app is not connected. Make sure to open http://localhost:8080 in your browser and wait for the MCP bridge to connect."
@@ -174,66 +179,75 @@ async fn main() -> Result<()> {
 		}
 
 		// Skip waiting for a response if this is a notification (no "id" field)
-		let is_notification = serde_json::from_str::<serde_json::Value>(&line)
-			.ok()
-			.and_then(|v| v.get("id").cloned())
-			.is_none();
-
-		if is_notification {
+		if request_id.is_none() {
+			// Notification — no response expected
 			continue;
 		}
+		let request_id = request_id.unwrap();
 
-		// Wait for the response from the browser (with a 15-second timeout)
-		match tokio::time::timeout(tokio::time::Duration::from_secs(15), response_rx.recv()).await {
-			Ok(Some(resp_text)) => {
-				let mut resp = resp_text;
-				resp.push('\n');
-				stdout.write_all(resp.as_bytes()).await?;
-				stdout.flush().await?;
-			}
-			Ok(None) => {
-				// Channel closed (browser disconnected)
-				let id = extract_id(&line);
+		// Wait for the response from the browser, matching by JSON-RPC `id`.
+		// We discard any stale responses left over from previously-timed-out calls
+		// (whose late replies would otherwise sit in the channel and be returned
+		// for the *next* request, with a mismatched id, poisoning the relay).
+		let started = std::time::Instant::now();
+		let total_budget = tokio::time::Duration::from_secs(5);
+		loop {
+			let elapsed = started.elapsed();
+			let timeout_dur = total_budget.saturating_sub(elapsed);
+			if timeout_dur.is_zero() {
+				// Timeout (5 seconds)
 				let error_response = serde_json::json!({
 					"jsonrpc": "2.0",
-					"id": id,
-					"error": {
-						"code": -32000,
-						"message": "Browser disconnected during tool call"
-					}
-				});
-				let mut resp = serde_json::to_string(&error_response)?;
-				resp.push('\n');
-				stdout.write_all(resp.as_bytes()).await?;
-				stdout.flush().await?;
-			}
-			Err(_) => {
-				// Timeout
-				let id = extract_id(&line);
-				let error_response = serde_json::json!({
-					"jsonrpc": "2.0",
-					"id": id,
+					"id": request_id,
 					"error": {
 						"code": -32001,
-						"message": "Tool call timed out (browser did not respond within 15 seconds)"
+						"message": "Tool call timed out (browser did not respond within 5 seconds)"
 					}
 				});
 				let mut resp = serde_json::to_string(&error_response)?;
 				resp.push('\n');
 				stdout.write_all(resp.as_bytes()).await?;
 				stdout.flush().await?;
+				break;
+			}
+			match tokio::time::timeout(timeout_dur, response_rx.recv()).await {
+				Ok(Some(resp_text)) => {
+					// Check whether this response matches our request id.
+					let resp_id = serde_json::from_str::<serde_json::Value>(&resp_text)
+						.ok()
+						.and_then(|v| v.get("id").cloned());
+					if resp_id.as_ref() != Some(&request_id) {
+						// Stale response from a previous timed-out call — discard and keep waiting.
+						eprintln!("[graphite-mcp-client] Discarding stale response (id mismatch: expected {request_id}, got {resp_id:?})");
+						continue;
+					}
+					let mut resp = resp_text;
+					resp.push('\n');
+					stdout.write_all(resp.as_bytes()).await?;
+					stdout.flush().await?;
+					break;
+				}
+				Ok(None) => {
+					// Channel closed (browser disconnected)
+					let error_response = serde_json::json!({
+						"jsonrpc": "2.0",
+						"id": request_id,
+						"error": {
+							"code": -32000,
+							"message": "Browser disconnected during tool call"
+						}
+					});
+					let mut resp = serde_json::to_string(&error_response)?;
+					resp.push('\n');
+					stdout.write_all(resp.as_bytes()).await?;
+					stdout.flush().await?;
+					break;
+				}
+				Err(_) => {
+					// This iteration's sub-timeout fired; loop and recompute remaining budget.
+					continue;
+				}
 			}
 		}
-	}
-
-	Ok(())
-}
-
-/// Extract the `id` field from a JSON-RPC request line (best-effort).
-fn extract_id(line: &str) -> serde_json::Value {
-	if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
-		v.get("id").cloned().unwrap_or(serde_json::Value::Null)
-	} else {
-		serde_json::Value::Null
 	}
 }
