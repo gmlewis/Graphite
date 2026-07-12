@@ -356,18 +356,20 @@ async fn set_viewport(args: &Value) -> Result<Vec<ToolContent>> {
 }
 
 /// Open the Graphite editor window so the user can see the current document.
-/// Finds the graphite binary and launches it in GUI mode.
 async fn show_editor(_args: &Value) -> Result<Vec<ToolContent>> {
-    // Find the graphite binary - try common locations
-    let graphite_bin = which_graphite_binary()
-        .ok_or_else(|| anyhow::anyhow!(
-            "Could not find graphite binary. Ensure 'graphite' is in your PATH or at ~/tools/bin/graphite"
-        ))?;
+    // Try the .app bundle first (macOS), then fall back to the raw binary
+    let home = std::env::var("HOME").unwrap_or_default();
+    let app_bundle = format!("{}/tools/Graphite.app", home);
 
-    // Launch graphite without --mcp to show the GUI
-    match std::process::Command::new(&graphite_bin)
-        .spawn()
-    {
+    let result = if std::path::Path::new(&app_bundle).exists() {
+        std::process::Command::new("open").arg(&app_bundle).spawn()
+    } else if let Some(bin) = which_graphite_binary() {
+        std::process::Command::new(&bin).spawn()
+    } else {
+        return Err(anyhow::anyhow!("Could not find Graphite binary or app bundle"));
+    };
+
+    match result {
         Ok(_) => Ok(vec![ToolContent::Text {
             text: "Graphite editor window is opening. The user can now see and interact with the document.".to_string(),
         }]),
