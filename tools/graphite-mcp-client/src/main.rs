@@ -99,9 +99,6 @@ async fn main() -> Result<()> {
 		}
 	});
 
-	// Wait a moment for the browser to connect (or not)
-	tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
 	// Read JSON-RPC from stdin (from the agent) and forward to browser
 	let stdin = io::stdin();
 	let mut reader = BufReader::new(stdin);
@@ -131,6 +128,22 @@ async fn main() -> Result<()> {
 			continue;
 		}
 
+		// Wait for the browser to connect before forwarding (up to 10 seconds)
+		let mut waited = 0u64;
+		loop {
+			let guard = browser_ws.lock().await;
+			if guard.is_some() {
+				drop(guard);
+				break;
+			}
+			drop(guard);
+			if waited >= 10_000 {
+				break;
+			}
+			tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+			waited += 200;
+		}
+
 		// Forward to browser WebSocket
 		let sent = {
 			let guard = browser_ws.lock().await;
@@ -157,6 +170,16 @@ async fn main() -> Result<()> {
 			resp.push('\n');
 			stdout.write_all(resp.as_bytes()).await?;
 			stdout.flush().await?;
+			continue;
+		}
+
+		// Skip waiting for a response if this is a notification (no "id" field)
+		let is_notification = serde_json::from_str::<serde_json::Value>(&line)
+			.ok()
+			.and_then(|v| v.get("id").cloned())
+			.is_none();
+
+		if is_notification {
 			continue;
 		}
 
