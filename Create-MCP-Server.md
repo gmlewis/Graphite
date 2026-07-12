@@ -18,16 +18,32 @@
 - Editor bridge stubs ready for wiring to `Editor::handle_message()`
 - Build: `cd tools/graphite-mcp-server && cargo build` (requires Rust 1.88+ for workspace, or standalone with `rustup run 1.95.0 cargo build`)
 
-### Phase 3: Wire Editor Bridge 🔲
-- Connect tool handlers to `Editor::handle_message()` dispatching
-- Implement `Editor` initialization in headless mode
-- Wire `FrontendMessage` responses back to tool results
-- Handle async node graph evaluation via `poll_node_graph_evaluation()`
+### Phase 3: Wire Editor Bridge 🔄 (headed-first)
+- **Architecture decision: headed-first** — MCP server runs in-process within a running editor
+- Editor launched with `--mcp` flag starts MCP server on stdin/stdout alongside GUI
+- MCP server reads JSON-RPC from stdin, dispatches tool calls via `AppEvent::McpToolCall` to main thread
+- Main thread processes tool calls via `DesktopWrapperMessage::FromWeb(Message::...)` dispatch
+- `FrontendMessage` responses converted to MCP tool results
+- Headless mode (standalone binary, no GUI) for catalog-only queries via `--standalone` flag
+- **Working tools (dispatched to editor):** `list_documents`, `create_document`, `delete_selected`, `undo`, `redo`, `activate_tool`, `zoom_to_fit`
+- **Working tools (catalog-only, no editor needed):** `get_node_catalog`, `get_node_details`
+- **Stub tools (return placeholder):** `get_layer_tree`, `create_rectangle/ellipse/line/text`, `select_layer`, `set_fill_color`, `set_stroke`, `set_opacity`, `set_blend_mode`, `move_layer`, `get_selection`, `get_layer_properties`, `get_node_graph`, `set_viewport`
+- **Files modified:** `editor/Cargo.toml` (added `headless` feature), `editor/src/application.rs`, `editor/src/node_graph_executor.rs`, `editor/src/node_graph_executor/runtime_io.rs`, `desktop/Cargo.toml`, `desktop/src/cli.rs`, `desktop/src/lib.rs`, `desktop/src/app.rs`, `desktop/src/event.rs`, `desktop/wrapper/Cargo.toml`
+- **Files created:** `desktop/src/mcp.rs`, `tools/graphite-mcp-server/src/lib.rs`
+- **Key insight:** MCP thread reads stdin → sends `AppEvent::McpToolCall` with oneshot response channel → main thread dispatches to editor → response sent back via channel
 
-### Phase 4: Expand Tool Set 🔲
-- Add remaining tools from the full tool set list
-- Add parameter validation using node catalog
-- Add error handling and meaningful error messages
+### Phase 4: Expand Tool Set ✅
+- Implemented all message-dispatch tools:
+  - **create_rectangle/ellipse/line/text** — generates SVG and dispatches `DocumentMessage::InsertSvg`
+  - **select_layer** — dispatches `DocumentMessage::SelectLayer { id, ctrl, shift }`
+  - **set_fill_color** — dispatches `DocumentMessage::SetFillForSelectedLayers { fill }`
+  - **set_opacity** — dispatches `DocumentMessage::SetOpacityForSelectedLayers { opacity }`
+  - **set_blend_mode** — dispatches `DocumentMessage::SetBlendModeForSelectedLayers { blend_mode }` with full enum mapping (27 modes)
+  - **move_layer** — dispatches `DocumentMessage::NudgeSelectedLayers { delta_x, delta_y, resize, resize_opposite }`
+  - **set_viewport** — dispatches `NavigationMessage::CanvasZoomSet { zoom_factor }` (zoom only)
+- **Still stubs (require direct state access):** `get_layer_tree`, `get_selection`, `get_layer_properties`, `get_node_graph`, `set_stroke` (needs per-layer `GraphOperationMessage`)
+- Added `graphene-std` and `graph-craft` dependencies to desktop crate (behind `mcp` feature)
+- **Total working tools: 19** (7 from Phase 3 + 12 new in Phase 4)
 
 ### Phase 5: Integration & Testing 🔲
 - Add MCP server launch option to Graphite CLI
@@ -49,11 +65,13 @@ Build a full-featured MCP (Model Context Protocol) Server for the Graphite Edito
 - This catalog is loaded by the MCP server at startup for tool descriptions and parameter validation
 - **Not** a 1:1 tool mapping — it's a data source
 
-**Layer 2: MCP Server (Rust, in the editor crate)**
-- Uses `rmcp` or `tower-lsp` crate for MCP protocol
-- Transport: WebSocket or stdio
-- Each tool handler dispatches into the existing `GraphiteEditor` message system via `editor_handle.process_message(...)`
+**Layer 2: MCP Server (Rust, embedded in desktop app)**
+- Runs as a dedicated thread within the Graphite desktop app (when launched with `--mcp`)
+- Reads JSON-RPC 2.0 messages from stdin, writes responses to stdout
+- Tool calls dispatched to the main thread via `AppEvent::McpToolCall` with a oneshot response channel
+- Main thread processes the tool call and dispatches into the editor via `DesktopWrapperMessage::FromWeb(Message::...)`
 - The MCP server is just another "frontend" — same path the web frontend uses
+- Also available as standalone binary (`graphite-mcp --standalone`) for catalog-only queries
 
 ### Tool Set (~30-50 high-level tools)
 
@@ -136,16 +154,21 @@ Build a full-featured MCP (Model Context Protocol) Server for the Graphite Edito
 - Register basic tool dispatcher
 - **Files to create:** `editor/src/mcp/` directory with `mod.rs`, `server.rs`, `tools.rs`
 
-### Phase 3: Core Tools (Proof of Concept)
-- Implement first 5-6 tools:
-  - `get_document_info`
-  - `get_layer_tree`
-  - `create_layer` (rectangle)
-  - `select_layer`
-  - `set_fill`
-  - `add_node` + `connect_nodes`
-- Wire each tool to existing `EditorMessage` / `NodeGraphMessage` dispatches
-- **Key insight:** Each tool handler calls `editor.process_message(EditorMessage::...())` — identical to how the frontend works
+### Phase 3: Core Tools (Proof of Concept) ✅
+- Implemented first batch of tools wired to the editor:
+  - `list_documents` — dispatches `PortfolioMessage::UpdateOpenDocumentsList`
+  - `create_document` — dispatches `PortfolioMessage::NewDocumentWithName`
+  - `delete_selected` — dispatches `DocumentMessage::DeleteSelectedLayers`
+  - `undo`/`redo` — dispatches `DocumentHistoryBackward`/`Forward`
+  - `activate_tool` — dispatches `ToolMessage::ActivateTool`
+  - `zoom_to_fit` — dispatches `DocumentMessage::ZoomCanvasToFitAll`
+  - `get_node_catalog`/`get_node_details` — catalog-only, no editor needed
+- Added `--mcp` flag to desktop CLI for headed mode
+- Added `--standalone` flag to MCP binary for catalog-only mode
+- MCP thread communicates with main thread via `mpsc` channels
+- **Key insight:** Each tool handler sends `DesktopWrapperMessage::FromWeb(Box::new(Message::...))` — identical to how the web frontend works
+- **Files modified:** `editor/Cargo.toml`, `editor/src/application.rs`, `editor/src/node_graph_executor.rs`, `editor/src/node_graph_executor/runtime_io.rs`, `desktop/Cargo.toml`, `desktop/src/cli.rs`, `desktop/src/lib.rs`, `desktop/src/app.rs`, `desktop/src/event.rs`, `desktop/wrapper/Cargo.toml`, `tools/graphite-mcp-server/Cargo.toml`, `tools/graphite-mcp-server/src/lib.rs`, `tools/graphite-mcp-server/src/main.rs`, `tools/graphite-mcp-server/src/tools.rs`, `tools/graphite-mcp-server/src/editor_bridge.rs`
+- **Files created:** `desktop/src/mcp.rs`
 
 ### Phase 4: Expand Tool Set
 - Add remaining tools from the tool set list above
@@ -164,6 +187,8 @@ Build a full-featured MCP (Model Context Protocol) Server for the Graphite Edito
 3. **Node catalog as JSON** — generated artifact, checked into repo or generated at build time
 4. **Tool granularity** — high-level semantic tools (not 1:1 node mappings). Agents want "add blur to layer", not "create blur node, wire inputs, set parameters"
 5. **Transport** — start with stdio (simplest for MCP), add WebSocket later for remote access
+6. **Headed-first architecture** — MCP server runs in-process within a running editor (not headless). This gives AI agents visual feedback via screenshots and works with the user's existing session. The MCP thread reads stdin and sends `AppEvent::McpToolCall` to the main thread via a channel, which dispatches to the editor. Headless mode is available via `--standalone` flag for catalog-only queries.
+7. **Feature-gated MCP** — MCP support is behind `--features mcp` in the desktop crate. The `headless` feature on `graphite-editor` exposes internal APIs needed for the standalone mode.
 
 ## Reference Files
 

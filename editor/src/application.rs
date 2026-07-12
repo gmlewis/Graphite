@@ -29,8 +29,8 @@ impl Editor {
 		Self { dispatcher }
 	}
 
-	#[cfg(test)]
-	pub(crate) fn new_local_executor() -> (Self, crate::node_graph_executor::NodeRuntime) {
+	#[cfg(any(test, feature = "headless"))]
+	pub fn new_local_executor() -> (Self, crate::node_graph_executor::NodeRuntime) {
 		let _ = ENVIRONMENT.set(*Editor::environment());
 		graphene_std::uuid::set_uuid_seed(0);
 

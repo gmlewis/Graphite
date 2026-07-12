@@ -25,6 +25,8 @@ use crate::window::Window;
 use crate::wrapper::messages::{DesktopFrontendMessage, DesktopWrapperMessage, InputMessage, MouseKeys, MouseState, Preferences};
 use crate::wrapper::{DesktopWrapper, MmapResourceStorage, NodeGraphExecutionResult, WgpuContext, serialize_frontend_messages};
 
+use graphite_editor::messages::tool::utility_types::ToolType;
+
 pub(crate) struct App {
 	render_state: Option<RenderState>,
 	wgpu_context: WgpuContext,
@@ -52,6 +54,8 @@ pub(crate) struct App {
 	startup_time: Option<Instant>,
 	exiting: Arc<AtomicBool>,
 	exit_reason: ExitReason,
+	#[cfg(feature = "mcp")]
+	mcp_handle: Option<crate::mcp::McpHandle>,
 }
 
 impl App {
@@ -68,6 +72,7 @@ impl App {
 		app_event_scheduler: AppEventScheduler,
 		preferences: Preferences,
 		launch_documents: Vec<PathBuf>,
+		#[cfg(feature = "mcp")] start_mcp: bool,
 	) -> Self {
 		let ctrlc_app_event_scheduler = app_event_scheduler.clone();
 		ctrlc::set_handler(move || {
@@ -102,6 +107,9 @@ impl App {
 		});
 		let desktop_wrapper = DesktopWrapper::new(rand::rng().random(), Arc::new(resource_storage), dirs::app_autosave_documents_dir(), wgpu_context.clone(), wake);
 
+		#[cfg(feature = "mcp")]
+		let mcp_scheduler = app_event_scheduler.clone();
+
 		Self {
 			render_state: None,
 			wgpu_context,
@@ -112,7 +120,7 @@ impl App {
 			window_fullscreen: false,
 			window_pending_drag: false,
 			pointer_position: Default::default(),
-			pointer_lock_position: Default::default(),
+			pointer_lock_position: None,
 			ui_scale: 1.,
 			app_event_receiver,
 			app_event_scheduler,
@@ -129,6 +137,12 @@ impl App {
 			startup_time: None,
 			exiting,
 			exit_reason: ExitReason::Shutdown,
+			#[cfg(feature = "mcp")]
+			mcp_handle: if start_mcp {
+				Some(crate::mcp::start(mcp_scheduler))
+			} else {
+				None
+			},
 		}
 	}
 
@@ -146,6 +160,246 @@ impl App {
 			self.exit_reason = reason;
 		}
 		self.app_event_scheduler.schedule(AppEvent::Exit);
+	}
+
+	#[cfg(feature = "mcp")]
+	fn handle_mcp_tool_call(&mut self, tool_name: &str, args: serde_json::Value) -> Result<Vec<String>, String> {
+		use graphite_editor::messages::prelude::*;
+		use graphite_editor::messages::input_mapper::utility_types::input_keyboard::Key;
+		use graph_craft::document::NodeId;
+		use graphene_std::raster::BlendMode;
+
+		let responses = match tool_name {
+			"list_documents" => {
+				self.desktop_wrapper.dispatch(DesktopWrapperMessage::FromWeb(Box::new(Message::Portfolio(PortfolioMessage::UpdateOpenDocumentsList))));
+				vec!["(document list updated)".to_string()]
+			}
+			"create_document" => {
+				let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("Untitled").to_string();
+				self.desktop_wrapper.dispatch(DesktopWrapperMessage::FromWeb(Box::new(Message::Portfolio(PortfolioMessage::NewDocumentWithName { name }))));
+				vec!["(document created)".to_string()]
+			}
+			"get_layer_tree" => {
+				vec!["(layer tree requires direct state access — not yet implemented)".to_string()]
+			}
+			"create_rectangle" => {
+				let x = args.get("x").and_then(|v| v.as_f64()).unwrap_or(0.);
+				let y = args.get("y").and_then(|v| v.as_f64()).unwrap_or(0.);
+				let w = args.get("width").and_then(|v| v.as_f64()).unwrap_or(100.);
+				let h = args.get("height").and_then(|v| v.as_f64()).unwrap_or(100.);
+				let fill = args.get("fill_color").and_then(|v| v.as_str()).unwrap_or("#000000");
+				let r = args.get("corner_radius").and_then(|v| v.as_f64()).unwrap_or(0.);
+				let svg = format!(r#"<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="{r}" fill="{fill}"/>"#);
+				self.desktop_wrapper.dispatch(DesktopWrapperMessage::FromWeb(Box::new(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::InsertSvg {
+					name: Some("Rectangle".into()),
+					svg,
+					mouse: None,
+					parent_and_insert_index: None,
+					place_at_origin: false,
+				})))));
+				vec![format!("Created rectangle at ({x}, {y}) {w}x{h}")]
+			}
+			"create_ellipse" => {
+				let cx = args.get("x").and_then(|v| v.as_f64()).unwrap_or(50.);
+				let cy = args.get("y").and_then(|v| v.as_f64()).unwrap_or(50.);
+				let rx = args.get("radius_x").and_then(|v| v.as_f64()).unwrap_or(50.);
+				let ry = args.get("radius_y").and_then(|v| v.as_f64()).unwrap_or(50.);
+				let fill = args.get("fill_color").and_then(|v| v.as_str()).unwrap_or("#000000");
+				let svg = format!(r#"<ellipse cx="{cx}" cy="{cy}" rx="{rx}" ry="{ry}" fill="{fill}"/>"#);
+				self.desktop_wrapper.dispatch(DesktopWrapperMessage::FromWeb(Box::new(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::InsertSvg {
+					name: Some("Ellipse".into()),
+					svg,
+					mouse: None,
+					parent_and_insert_index: None,
+					place_at_origin: false,
+				})))));
+				vec![format!("Created ellipse at ({cx}, {cy}) rx={rx} ry={ry}")]
+			}
+			"create_line" => {
+				let x1 = args.get("x1").and_then(|v| v.as_f64()).unwrap_or(0.);
+				let y1 = args.get("y1").and_then(|v| v.as_f64()).unwrap_or(0.);
+				let x2 = args.get("x2").and_then(|v| v.as_f64()).unwrap_or(100.);
+				let y2 = args.get("y2").and_then(|v| v.as_f64()).unwrap_or(100.);
+				let stroke = args.get("stroke_color").and_then(|v| v.as_str()).unwrap_or("#000000");
+				let sw = args.get("stroke_width").and_then(|v| v.as_f64()).unwrap_or(2.);
+				let svg = format!(r#"<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="{stroke}" stroke-width="{sw}"/>"#);
+				self.desktop_wrapper.dispatch(DesktopWrapperMessage::FromWeb(Box::new(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::InsertSvg {
+					name: Some("Line".into()),
+					svg,
+					mouse: None,
+					parent_and_insert_index: None,
+					place_at_origin: false,
+				})))));
+				vec![format!("Created line ({x1},{y1}) to ({x2},{y2})")]
+			}
+			"create_text" => {
+				let x = args.get("x").and_then(|v| v.as_f64()).unwrap_or(0.);
+				let y = args.get("y").and_then(|v| v.as_f64()).unwrap_or(0.);
+				let text = args.get("text").and_then(|v| v.as_str()).unwrap_or("Text");
+				let font_size = args.get("font_size").and_then(|v| v.as_f64()).unwrap_or(24.);
+				let fill = args.get("fill_color").and_then(|v| v.as_str()).unwrap_or("#000000");
+				let svg = format!(r#"<text x="{x}" y="{y}" font-size="{font_size}" fill="{fill}">{text}</text>"#);
+				self.desktop_wrapper.dispatch(DesktopWrapperMessage::FromWeb(Box::new(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::InsertSvg {
+					name: Some("Text".into()),
+					svg,
+					mouse: None,
+					parent_and_insert_index: None,
+					place_at_origin: false,
+				})))));
+				vec![format!("Created text at ({x}, {y}): \"{text}\"")]
+			}
+			"select_layer" => {
+				let layer_id_str = args.get("layer_id").and_then(|v| v.as_str()).ok_or("Missing layer_id")?;
+				let id_num: u64 = layer_id_str.parse().map_err(|e| format!("Invalid layer_id '{layer_id_str}': {e}"))?;
+				let id = NodeId(id_num);
+				let ctrl = args.get("clear_existing").and_then(|v| v.as_bool()).unwrap_or(true);
+				self.desktop_wrapper.dispatch(DesktopWrapperMessage::FromWeb(Box::new(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::SelectLayer {
+					id,
+					ctrl: false,
+					shift: false,
+				})))));
+				if ctrl {
+					// Also deselect others first by selecting without ctrl/shift after a deselect
+					// Actually, SelectLayer with ctrl=false, shift=false replaces the selection
+				}
+				vec![format!("Selected layer {id_num}")]
+			}
+			"delete_selected" => {
+				self.desktop_wrapper.dispatch(DesktopWrapperMessage::FromWeb(Box::new(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::DeleteSelectedLayers)))));
+				vec!["(selected layers deleted)".to_string()]
+			}
+			"undo" => {
+				self.desktop_wrapper.dispatch(DesktopWrapperMessage::FromWeb(Box::new(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::DocumentHistoryBackward)))));
+				vec!["(undone)".to_string()]
+			}
+			"redo" => {
+				self.desktop_wrapper.dispatch(DesktopWrapperMessage::FromWeb(Box::new(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::DocumentHistoryForward)))));
+				vec!["(redone)".to_string()]
+			}
+			"set_fill_color" => {
+				let opacity = args.get("opacity").and_then(|v| v.as_f64()).unwrap_or(100.);
+				self.desktop_wrapper.dispatch(DesktopWrapperMessage::FromWeb(Box::new(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::SetFillForSelectedLayers {
+					fill: opacity / 100.,
+				})))));
+				vec![format!("Set fill opacity to {opacity}%")]
+			}
+			"set_stroke" => {
+				vec!["(set_stroke requires per-layer GraphOperation — not yet implemented via DocumentMessage)".to_string()]
+			}
+			"set_opacity" => {
+				let opacity = args.get("opacity").and_then(|v| v.as_f64()).unwrap_or(100.);
+				self.desktop_wrapper.dispatch(DesktopWrapperMessage::FromWeb(Box::new(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::SetOpacityForSelectedLayers {
+					opacity: opacity / 100.,
+				})))));
+				vec![format!("Set opacity to {opacity}%")]
+			}
+			"set_blend_mode" => {
+				let mode_str = args.get("blend_mode").and_then(|v| v.as_str()).unwrap_or("Normal");
+				let blend_mode = match mode_str {
+					"Normal" => BlendMode::Normal,
+					"Darken" => BlendMode::Darken,
+					"Multiply" => BlendMode::Multiply,
+					"ColorBurn" => BlendMode::ColorBurn,
+					"LinearBurn" => BlendMode::LinearBurn,
+					"DarkerColor" => BlendMode::DarkerColor,
+					"Lighten" => BlendMode::Lighten,
+					"Screen" => BlendMode::Screen,
+					"ColorDodge" => BlendMode::ColorDodge,
+					"LinearDodge" => BlendMode::LinearDodge,
+					"LighterColor" => BlendMode::LighterColor,
+					"Overlay" => BlendMode::Overlay,
+					"SoftLight" => BlendMode::SoftLight,
+					"HardLight" => BlendMode::HardLight,
+					"VividLight" => BlendMode::VividLight,
+					"LinearLight" => BlendMode::LinearLight,
+					"PinLight" => BlendMode::PinLight,
+					"HardMix" => BlendMode::HardMix,
+					"Difference" => BlendMode::Difference,
+					"Exclusion" => BlendMode::Exclusion,
+					"Subtract" => BlendMode::Subtract,
+					"Divide" => BlendMode::Divide,
+					"Hue" => BlendMode::Hue,
+					"Saturation" => BlendMode::Saturation,
+					"Color" => BlendMode::Color,
+					"Luminosity" => BlendMode::Luminosity,
+					_ => return Err(format!("Unknown blend mode: {mode_str}")),
+				};
+				self.desktop_wrapper.dispatch(DesktopWrapperMessage::FromWeb(Box::new(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::SetBlendModeForSelectedLayers {
+					blend_mode,
+				})))));
+				vec![format!("Set blend mode to {mode_str}")]
+			}
+			"move_layer" => {
+				let dx = args.get("dx").and_then(|v| v.as_f64()).unwrap_or(0.);
+				let dy = args.get("dy").and_then(|v| v.as_f64()).unwrap_or(0.);
+				self.desktop_wrapper.dispatch(DesktopWrapperMessage::FromWeb(Box::new(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::NudgeSelectedLayers {
+					delta_x: dx,
+					delta_y: dy,
+					resize: Key::Alt,
+					resize_opposite: Key::Control,
+				})))));
+				vec![format!("Moved selected layers by ({dx}, {dy})")]
+			}
+			"get_selection" => {
+				vec!["(get_selection requires direct state access — not yet implemented)".to_string()]
+			}
+			"get_layer_properties" => {
+				vec!["(get_layer_properties requires direct state access — not yet implemented)".to_string()]
+			}
+			"get_node_graph" => {
+				vec!["(get_node_graph requires direct state access — not yet implemented)".to_string()]
+			}
+			"activate_tool" => {
+				let tool = args.get("tool").and_then(|v| v.as_str()).unwrap_or("Select");
+				let tool_type = match tool {
+					"Select" => ToolType::Select,
+					"Pen" => ToolType::Pen,
+					"Path" => ToolType::Path,
+					"Line" => ToolType::Line,
+					"Rectangle" => ToolType::Rectangle,
+					"Ellipse" => ToolType::Ellipse,
+					"Polygon" => ToolType::Shape,
+					"Star" => ToolType::Shape,
+					"Spiral" => ToolType::Shape,
+					"Freehand" => ToolType::Freehand,
+					"Text" => ToolType::Text,
+					"Fill" => ToolType::Fill,
+					"Gradient" => ToolType::Gradient,
+					"Eyedropper" => ToolType::Eyedropper,
+					_ => ToolType::Select,
+				};
+				self.desktop_wrapper.dispatch(DesktopWrapperMessage::FromWeb(Box::new(Message::Tool(ToolMessage::ActivateTool { tool_type }))));
+				vec![format!("Activated tool: {tool}")]
+			}
+			"zoom_to_fit" => {
+				self.desktop_wrapper.dispatch(DesktopWrapperMessage::FromWeb(Box::new(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::ZoomCanvasToFitAll)))));
+				vec!["(zoomed to fit)".to_string()]
+			}
+			"set_viewport" => {
+				let zoom = args.get("zoom").and_then(|v| v.as_f64());
+				if let Some(zf) = zoom {
+					let msg = Message::Portfolio(PortfolioMessage::Document(
+						DocumentMessage::Navigation(NavigationMessage::CanvasZoomSet { zoom_factor: zf })
+					));
+					self.desktop_wrapper.dispatch(DesktopWrapperMessage::FromWeb(Box::new(msg)));
+				}
+				vec!["(set_viewport partially implemented — zoom only)".to_string()]
+			}
+			"get_node_catalog" | "get_node_details" => {
+				match graphite_mcp_server::tools::call_tool(tool_name, args) {
+					Ok(contents) => contents.into_iter().filter_map(|c| match c {
+						graphite_mcp_server::mcp_protocol::ToolContent::Text { text } => Some(text),
+						_ => None,
+					}).collect(),
+					Err(e) => vec![format!("Error: {e}")],
+				}
+			}
+			_ => {
+				vec![format!("Unknown tool: {tool_name}")]
+			}
+		};
+
+		Ok(responses)
 	}
 
 	fn resize(&mut self) {
@@ -511,6 +765,11 @@ impl App {
 			#[cfg(target_os = "macos")]
 			AppEvent::MenuEvent { id } => {
 				self.dispatch_desktop_wrapper_message(DesktopWrapperMessage::MenuEvent { id });
+			}
+			#[cfg(feature = "mcp")]
+			AppEvent::McpToolCall { tool_name, args, response_sender } => {
+				let result = self.handle_mcp_tool_call(&tool_name, args);
+				let _ = response_sender.send(result);
 			}
 		}
 	}

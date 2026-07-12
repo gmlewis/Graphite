@@ -18,11 +18,16 @@ recommended = ["gpu", "accelerated_paint"]
 embedded_resources = ["dep:graphite-desktop-embedded-resources"]
 gpu = ["graphite-desktop-wrapper/gpu"]
 accelerated_paint = ["cef/accelerated_osr"]
+mcp = ["dep:graphite-mcp-server", "dep:graphite-editor", "dep:graphene-std", "dep:graph-craft", "graphite-desktop-wrapper/headless"]
 
 [dependencies]
 # Local dependencies
 graphite-desktop-wrapper = { path = "wrapper" }
 graphite-desktop-embedded-resources = { path = "embedded-resources", optional = true }
+graphite-mcp-server = { path = "../tools/graphite-mcp-server", optional = true }
+graphite-editor = { workspace = true, optional = true }
+graphene-std = { workspace = true, optional = true }
+graph-craft = { workspace = true, optional = true }
 
 wgpu = { workspace = true }
 winit = { workspace = true, features = [
@@ -46,6 +51,7 @@ rfd = { workspace = true }
 open = { workspace = true }
 lzma-rust2 = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 rand = { workspace = true, features = ["thread_rng"] }
 clap = { workspace = true, features = ["derive"] }
 interprocess = "2.4.2"

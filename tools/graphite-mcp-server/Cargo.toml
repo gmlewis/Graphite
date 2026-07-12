@@ -6,6 +6,10 @@ version.workspace = true
 license.workspace = true
 authors.workspace = true
 
+[lib]
+name = "graphite_mcp_server"
+path = "src/lib.rs"
+
 [[bin]]
 name = "graphite-mcp"
 path = "src/main.rs"
@@ -30,6 +34,7 @@ tokio = { version = "1", features = ["macros", "io-std", "io-util", "rt", "rt-mu
 log = { workspace = true }
 env_logger = { workspace = true }
 anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
 
 # Editor integration (optional, enabled by default in workspace)
 graphite-editor = { workspace = true, optional = true }

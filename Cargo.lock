@@ -2191,8 +2191,12 @@ dependencies = [
  "fd-lock",
  "futures",
  "glam",
+ "graph-craft",
+ "graphene-std",
  "graphite-desktop-embedded-resources",
  "graphite-desktop-wrapper",
+ "graphite-editor",
+ "graphite-mcp-server",
  "interprocess",
  "lzma-rust2",
  "muda",
@@ -2204,6 +2208,7 @@ dependencies = [
  "rfd",
  "ron",
  "serde",
+ "serde_json",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -2325,6 +2330,7 @@ name = "graphite-mcp-server"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "clap",
  "document-container",
  "env_logger",
  "glam",

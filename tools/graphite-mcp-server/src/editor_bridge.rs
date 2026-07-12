@@ -1,6 +1,6 @@
 use anyhow::{Result, Context};
 use serde_json::Value;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use crate::mcp_protocol::ToolContent;
 
@@ -17,6 +17,52 @@ fn get_catalog() -> Result<&'static Value> {
     let catalog: Value = serde_json::from_str(CATALOG_JSON).context("Failed to parse embedded node catalog")?;
     let _ = CATALOG.set(catalog);
     Ok(CATALOG.get().unwrap())
+}
+
+// Editor reference for headed mode. We use a wrapper type to make it thread-safe.
+struct EditorWrapper {
+    ptr: *mut graphite_editor::application::Editor,
+}
+
+// SAFETY: The editor is only accessed from the main thread via the event loop.
+// The MCP server thread sends commands via channels, and the main thread processes them.
+unsafe impl Send for EditorWrapper {}
+unsafe impl Sync for EditorWrapper {}
+
+static EDITOR_WRAPPER: OnceLock<Mutex<Option<EditorWrapper>>> = OnceLock::new();
+
+fn get_editor_wrapper() -> &'static Mutex<Option<EditorWrapper>> {
+    EDITOR_WRAPPER.get_or_init(|| Mutex::new(None))
+}
+
+/// Set the editor reference for headed mode. Called by the desktop app's main thread.
+///
+/// # Safety
+/// The caller must ensure the editor lives as long as the MCP server runs,
+/// and that `clear_editor()` is called before the editor is dropped.
+pub unsafe fn set_editor(editor: &mut graphite_editor::application::Editor) {
+    let wrapper = get_editor_wrapper();
+    *wrapper.lock().unwrap() = Some(EditorWrapper {
+        ptr: editor as *mut _,
+    });
+}
+
+/// Clear the editor reference. Called when the MCP server shuts down.
+pub fn clear_editor() {
+    if let Some(wrapper) = EDITOR_WRAPPER.get() {
+        *wrapper.lock().unwrap() = None;
+    }
+}
+
+fn with_editor<F, R>(f: F) -> Result<R>
+where
+    F: FnOnce(&mut graphite_editor::application::Editor) -> R,
+{
+    let wrapper_lock = get_editor_wrapper();
+    let guard = wrapper_lock.lock().unwrap();
+    let wrapper = guard.as_ref().context("No editor connected (standalone mode)")?;
+    // SAFETY: set_editor guarantees the editor outlives this reference
+    Ok(f(unsafe { &mut *wrapper.ptr }))
 }
 
 pub async fn dispatch_tool_call(name: &str, args: Value) -> Result<Vec<ToolContent>> {
@@ -172,13 +218,56 @@ async fn get_node_details(args: &Value) -> Result<Vec<ToolContent>> {
     Err(anyhow::anyhow!("Node not found: `{node_id}`"))
 }
 
-// -- Editor tools (stub: dispatch via JSON-RPC to editor subprocess) --
+// -- Editor tools: dispatch via Editor::handle_message() when connected --
+
+use graphite_editor::messages::prelude::*;
 
 async fn send_editor_command(command: &str, args: Value) -> Result<Vec<ToolContent>> {
-    log::info!("Editor command: {command}, args: {args}");
-    Ok(vec![ToolContent::Text {
-        text: format!("[editor command: {command}] (not yet connected to editor process)"),
-    }])
+    match with_editor(|editor| {
+        let message = match command {
+            "list_documents" => Some(Message::Portfolio(PortfolioMessage::UpdateOpenDocumentsList)),
+            "create_document" => {
+                let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("Untitled").to_string();
+                Some(Message::Portfolio(PortfolioMessage::NewDocumentWithName { name }))
+            }
+            "delete_selected" => Some(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::DeleteSelectedLayers))),
+            "undo" => Some(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::DocumentHistoryBackward))),
+            "redo" => Some(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::DocumentHistoryForward))),
+            "zoom_to_fit" => Some(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::ZoomCanvasToFitAll))),
+            _ => None,
+        };
+
+        if let Some(msg) = message {
+            let responses = editor.handle_message(msg);
+            let text = format_responses(&responses);
+            Ok::<_, anyhow::Error>(text)
+        } else {
+            Ok(format!("[editor command: {command}] (handler not yet implemented)"))
+        }
+    }) {
+        Ok(text) => Ok(vec![ToolContent::Text { text: text? }]),
+        Err(e) => Ok(vec![ToolContent::Text { text: format!("Error: {e}") }]),
+    }
+}
+
+fn format_responses(responses: &[FrontendMessage]) -> String {
+    if responses.is_empty() {
+        "OK".into()
+    } else {
+        let mut out = String::new();
+        for msg in responses {
+            // Extract useful info from frontend messages
+            match msg {
+                FrontendMessage::UpdateOpenDocumentsList { .. } => {
+                    out.push_str("(document list updated)\n");
+                }
+                _ => {
+                    out.push_str(&format!("({:?})\n", std::mem::discriminant(msg)));
+                }
+            }
+        }
+        out
+    }
 }
 
 async fn list_documents(_args: &Value) -> Result<Vec<ToolContent>> {

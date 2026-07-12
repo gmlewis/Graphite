@@ -6,4 +6,7 @@ pub struct Cli {
 
 	#[arg(long, action = clap::ArgAction::SetTrue, help = "Disable hardware accelerated UI rendering")]
 	pub disable_ui_acceleration: bool,
+
+	#[arg(long, action = clap::ArgAction::SetTrue, help = "Start MCP server on stdin/stdout for AI agent control")]
+	pub mcp: bool,
 }

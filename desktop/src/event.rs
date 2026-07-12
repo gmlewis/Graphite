@@ -10,6 +10,13 @@ pub(crate) enum AppEvent {
 	NodeGraphExecutionResult(NodeGraphExecutionResult),
 	Exit,
 	OpenFiles(Vec<std::path::PathBuf>),
+	/// MCP tool call from the AI agent. Carries the tool name, arguments, and a one-shot response channel.
+	#[cfg(feature = "mcp")]
+	McpToolCall {
+		tool_name: String,
+		args: serde_json::Value,
+		response_sender: std::sync::mpsc::Sender<Result<Vec<String>, String>>,
+	},
 	#[cfg(target_os = "macos")]
 	MenuEvent {
 		id: String,

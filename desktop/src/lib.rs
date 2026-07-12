@@ -16,6 +16,8 @@ mod cli;
 mod dirs;
 mod event;
 mod gpu_context;
+#[cfg(feature = "mcp")]
+mod mcp;
 mod persist;
 mod preferences;
 mod render;
@@ -113,7 +115,17 @@ pub fn start() {
 		}
 	};
 
-	let app = App::new(Box::new(cef_context), cef_view_info_sender, wgpu_context, app_event_receiver, app_event_scheduler, prefs, cli.files);
+	let app = App::new(
+		Box::new(cef_context),
+		cef_view_info_sender,
+		wgpu_context,
+		app_event_receiver,
+		app_event_scheduler,
+		prefs,
+		cli.files,
+		#[cfg(feature = "mcp")]
+		cli.mcp,
+	);
 
 	let exit_reason = app.run(event_loop);
 

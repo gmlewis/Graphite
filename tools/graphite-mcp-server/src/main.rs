@@ -1,47 +1,24 @@
-mod editor_bridge;
-mod mcp_protocol;
-mod tools;
+use clap::Parser;
 
-use mcp_protocol::{JsonRpcMessage, McpServer};
-use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
+#[derive(clap::Parser)]
+#[clap(name = "graphite-mcp", version)]
+struct Cli {
+    /// Run in standalone mode (no editor, catalog-only tools)
+    #[arg(long)]
+    standalone: bool,
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     env_logger::init();
 
-    let stdin = io::stdin();
-    let stdout = io::stdout();
-    let mut reader = BufReader::new(stdin);
-    let mut writer = stdout;
+    let cli = Cli::parse();
 
-    let mut server = McpServer::new();
-
-    eprintln!("graphite-mcp-server started, waiting for JSON-RPC on stdin...");
-
-    let mut buf = String::new();
-    loop {
-        buf.clear();
-        let n = reader.read_line(&mut buf).await?;
-        if n == 0 {
-            break;
-        }
-
-        let msg = match serde_json::from_str::<JsonRpcMessage>(buf.trim()) {
-            Ok(m) => m,
-            Err(e) => {
-                log::warn!("Failed to parse JSON-RPC: {e}");
-                continue;
-            }
-        };
-
-        let response = server.handle(msg).await;
-        if let Some(resp) = response {
-            let mut resp_str = serde_json::to_string(&resp)?;
-            resp_str.push('\n');
-            writer.write_all(resp_str.as_bytes()).await?;
-            writer.flush().await?;
-        }
+    if cli.standalone {
+        graphite_mcp_server::run_standalone().await
+    } else {
+        eprintln!("Error: --standalone flag required for standalone mode.");
+        eprintln!("For headed mode, use the Graphite desktop app with --mcp flag.");
+        std::process::exit(1);
     }
-
-    Ok(())
 }
