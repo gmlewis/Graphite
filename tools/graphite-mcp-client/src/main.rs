@@ -120,7 +120,10 @@ async fn main() -> Result<()> {
 		buf.clear();
 		let n = reader.read_line(&mut buf).await?;
 		if n == 0 {
-			break;
+			// stdin EOF — the agent hasn't connected yet. Wait a bit and retry.
+			// This allows the relay to stay alive even when launched without stdin.
+			tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+			continue;
 		}
 
 		let line = buf.trim().to_string();

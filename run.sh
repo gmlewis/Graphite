@@ -18,7 +18,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Build if requested or if binaries don't exist
+# Build if requested or if the MCP relay doesn't exist
 if [ "$BUILD" = true ] || [ ! -f "$INSTALL_DIR/graphite-mcp-client" ]; then
     echo "Building graphite-mcp-client..."
     (cd "$SCRIPT_DIR" && rustup run 1.95.0 cargo build --release -p graphite-mcp-client)
@@ -28,27 +28,67 @@ if [ "$BUILD" = true ] || [ ! -f "$INSTALL_DIR/graphite-mcp-client" ]; then
     echo ""
 fi
 
-# Check that graphite-mcp-client exists
 if [ ! -f "$INSTALL_DIR/graphite-mcp-client" ]; then
     echo "Error: graphite-mcp-client not found at $INSTALL_DIR/graphite-mcp-client"
     echo "Run: ./run.sh --build"
     exit 1
 fi
 
-echo "Starting Graphite MCP relay server on port $MCP_PORT..."
+# Check npm dependencies
+if [ ! -d "$SCRIPT_DIR/frontend/node_modules" ]; then
+    echo "Installing npm dependencies..."
+    (cd "$SCRIPT_DIR/frontend" && npm ci --include=dev --prefer-offline --no-audit --no-fund)
+    echo ""
+fi
+
+# Check branding assets
+if [ ! -d "$SCRIPT_DIR/branding/assets" ]; then
+    echo "Downloading branding assets..."
+    URL=$(head -1 "$SCRIPT_DIR/.branding")
+    curl -L "$URL" -o /tmp/branding.tar.gz
+    mkdir -p "$SCRIPT_DIR/branding"
+    tar xzf /tmp/branding.tar.gz --strip-components=1 -C "$SCRIPT_DIR/branding/"
+    cp "$SCRIPT_DIR/.branding" "$SCRIPT_DIR/branding/.branding"
+    echo ""
+fi
+
+# Check if WASM wrapper is built
+if [ ! -f "$SCRIPT_DIR/frontend/wrapper/pkg/graphite_wasm_wrapper.js" ]; then
+    echo "Building WASM wrapper..."
+    (cd "$SCRIPT_DIR" && rustup run 1.95.0 cargo build --lib --package graphite-wasm-wrapper --target wasm32-unknown-unknown)
+    rustup run 1.95.0 wasm-bindgen --target web --out-name graphite_wasm_wrapper --out-dir "$SCRIPT_DIR/frontend/wrapper/pkg" \
+        "$SCRIPT_DIR/target/wasm32-unknown-unknown/debug/graphite_wasm_wrapper.wasm" --debug
+    echo ""
+fi
+
+# Cleanup function
+cleanup() {
+    [ -n "${VITE_PID:-}" ] && kill $VITE_PID 2>/dev/null || true
+    [ -n "${RELAY_PID:-}" ] && kill $RELAY_PID 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+echo "Starting Graphite web app (Vite dev server on port $PORT)..."
+echo "Starting MCP relay server on port $MCP_PORT..."
 echo ""
-echo "The relay waits for the browser to connect, then bridges agent tool calls."
+echo "  1. Open http://localhost:$PORT in your browser"
+echo "  2. The MCP bridge auto-connects (check browser console for '[MCP Bridge]')"
+echo "  3. Your AI agent can now control the editor via the MCP relay"
 echo ""
-echo "Next steps:"
-echo "  1. Start the Graphite web app in another terminal:"
-echo "       cd \"$SCRIPT_DIR\" && cargo run"
-echo "  2. Open http://localhost:$PORT in your browser"
-echo "  3. The MCP bridge connects automatically (check browser console)"
-echo "  4. Configure your AI agent (opencode/Claude) to use this MCP server"
-echo ""
-echo "Press Ctrl+C to stop."
+echo "Press Ctrl+C to stop both servers."
 echo ""
 
-# Start the MCP relay server
+# Start Vite dev server
+cd "$SCRIPT_DIR/frontend"
+CARGO_TARGET_DIR="$SCRIPT_DIR/target" npx vite --port "$PORT" --host 0.0.0.0 &
+VITE_PID=$!
+
+# Start MCP relay server
 export GRAPHITE_MCP_PORT="$MCP_PORT"
-exec "$INSTALL_DIR/graphite-mcp-client"
+"$INSTALL_DIR/graphite-mcp-client" &
+RELAY_PID=$!
+
+# Wait for either process to exit
+while kill -0 $VITE_PID 2>/dev/null && kill -0 $RELAY_PID 2>/dev/null; do
+    sleep 1
+done
