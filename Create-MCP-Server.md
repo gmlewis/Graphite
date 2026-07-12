@@ -41,9 +41,15 @@
   - **set_blend_mode** — dispatches `DocumentMessage::SetBlendModeForSelectedLayers { blend_mode }` with full enum mapping (27 modes)
   - **move_layer** — dispatches `DocumentMessage::NudgeSelectedLayers { delta_x, delta_y, resize, resize_opposite }`
   - **set_viewport** — dispatches `NavigationMessage::CanvasZoomSet { zoom_factor }` (zoom only)
-- **Still stubs (require direct state access):** `get_layer_tree`, `get_selection`, `get_layer_properties`, `get_node_graph`, `set_stroke` (needs per-layer `GraphOperationMessage`)
+- Implemented state-reading tools via direct `Editor` access:
+  - **get_layer_tree** — iterates `metadata.all_layers()`, reads name/visible/locked from `network_interface`
+  - **get_selection** — reads `selected_nodes().selected_layers(metadata)` with layer names
+  - **get_layer_properties** — reads name, kind, visible, locked for a specific layer by ID
+  - **get_node_graph** — reads `document_node()` implementation and inputs for a layer
+  - **set_stroke** — parses hex color, dispatches `GraphOperationMessage::StrokeSet` on first selected layer
+- Added public `editor()` accessor to `DesktopWrapper` and `active_document()` / `active_document_mut()` to `Editor`
 - Added `graphene-std` and `graph-craft` dependencies to desktop crate (behind `mcp` feature)
-- **Total working tools: 19** (7 from Phase 3 + 12 new in Phase 4)
+- **Total working tools: 24** (all registered tools now functional)
 
 ### Phase 5: Integration & Testing 🔲
 - Add MCP server launch option to Graphite CLI
