@@ -61,34 +61,17 @@ if [ ! -f "$SCRIPT_DIR/frontend/wrapper/pkg/graphite_wasm_wrapper.js" ]; then
     echo ""
 fi
 
-# Cleanup function
-cleanup() {
-    [ -n "${VITE_PID:-}" ] && kill $VITE_PID 2>/dev/null || true
-    [ -n "${RELAY_PID:-}" ] && kill $RELAY_PID 2>/dev/null || true
-}
-trap cleanup EXIT INT TERM
-
 echo "Starting Graphite web app (Vite dev server on port $PORT)..."
-echo "Starting MCP relay server on port $MCP_PORT..."
 echo ""
 echo "  1. Open http://localhost:$PORT in your browser"
-echo "  2. The MCP bridge auto-connects (check browser console for '[MCP Bridge]')"
-echo "  3. Your AI agent can now control the editor via the MCP relay"
+echo "  2. Start your AI agent (opencode) — it spawns graphite-mcp-client"
+echo "     which starts the MCP WebSocket relay on port $MCP_PORT"
+echo "  3. The browser's MCP bridge auto-connects to the relay"
+echo "     (check browser console for '[MCP Bridge] Connected')"
 echo ""
-echo "Press Ctrl+C to stop both servers."
+echo "Press Ctrl+C to stop the web app."
 echo ""
 
-# Start Vite dev server
+# Start Vite dev server (the agent will spawn graphite-mcp-client separately)
 cd "$SCRIPT_DIR/frontend"
-CARGO_TARGET_DIR="$SCRIPT_DIR/target" npx vite --port "$PORT" --host 0.0.0.0 &
-VITE_PID=$!
-
-# Start MCP relay server
-export GRAPHITE_MCP_PORT="$MCP_PORT"
-"$INSTALL_DIR/graphite-mcp-client" &
-RELAY_PID=$!
-
-# Wait for either process to exit
-while kill -0 $VITE_PID 2>/dev/null && kill -0 $RELAY_PID 2>/dev/null; do
-    sleep 1
-done
+CARGO_TARGET_DIR="$SCRIPT_DIR/target" exec npx vite --port "$PORT" --host 0.0.0.0
