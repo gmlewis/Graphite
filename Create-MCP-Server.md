@@ -51,10 +51,13 @@
 - Added `graphene-std` and `graph-craft` dependencies to desktop crate (behind `mcp` feature)
 - **Total working tools: 24** (all registered tools now functional)
 
-### Phase 5: Integration & Testing 🔲
-- Add MCP server launch option to Graphite CLI
-- Test with Claude/other MCP clients
-- Document tool usage
+### Phase 5: Integration & Testing ✅
+- ✅ MCP server launch option added to Graphite CLI (`--mcp` flag)
+- ✅ Claude MCP configuration file created (`claude_mcp_config.json`)
+- ✅ MCP client test script created and verified (`test_mcp.sh`)
+- ✅ Comprehensive documentation with all 24 tools and examples (`README.md`)
+- ✅ Build script for release builds and installation (`build-and-install.sh`)
+- **Test results:** Initialize, tools/list (24 tools), get_node_catalog (272 nodes), get_node_details all working
 
 ## Goal
 

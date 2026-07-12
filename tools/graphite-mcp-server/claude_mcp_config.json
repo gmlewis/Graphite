@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "graphite": {
+      "command": "/Users/glenn/tools/bin/graphite",
+      "args": ["--mcp"],
+      "env": {}
+    }
+  }
+}
