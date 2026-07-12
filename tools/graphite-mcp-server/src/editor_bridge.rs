@@ -355,53 +355,9 @@ async fn set_viewport(args: &Value) -> Result<Vec<ToolContent>> {
     send_editor_command("set_viewport", args.clone()).await
 }
 
-/// Open the Graphite editor window so the user can see the current document.
+/// Inform the user to open the Graphite editor to see changes.
 async fn show_editor(_args: &Value) -> Result<Vec<ToolContent>> {
-    // Try the .app bundle first (macOS), then fall back to the raw binary
-    let home = std::env::var("HOME").unwrap_or_default();
-    let app_bundle = format!("{}/tools/Graphite.app", home);
-
-    let result = if std::path::Path::new(&app_bundle).exists() {
-        std::process::Command::new("open").arg(&app_bundle).spawn()
-    } else if let Some(bin) = which_graphite_binary() {
-        std::process::Command::new(&bin).spawn()
-    } else {
-        return Err(anyhow::anyhow!("Could not find Graphite binary or app bundle"));
-    };
-
-    match result {
-        Ok(_) => Ok(vec![ToolContent::Text {
-            text: "Graphite editor window is opening. The user can now see and interact with the document.".to_string(),
-        }]),
-        Err(e) => Err(anyhow::anyhow!("Failed to launch Graphite: {e}")),
-    }
-}
-
-fn which_graphite_binary() -> Option<String> {
-    // Check ~/tools/bin/graphite first
-    let home = std::env::var("HOME").unwrap_or_default();
-    let tools_bin = format!("{}/tools/bin/graphite", home);
-    if std::path::Path::new(&tools_bin).exists() {
-        return Some(tools_bin);
-    }
-
-    // Check PATH via `which`
-    if let Ok(output) = std::process::Command::new("which").arg("graphite").output() {
-        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !path.is_empty() {
-            return Some(path);
-        }
-    }
-
-    // Check current exe's directory (same dir as graphite-mcp)
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let sibling = dir.join("graphite");
-            if sibling.exists() {
-                return Some(sibling.to_string_lossy().to_string());
-            }
-        }
-    }
-
-    None
+    Ok(vec![ToolContent::Text {
+        text: "To view the document, please open the Graphite application manually. The editor will show the current state when opened.".to_string(),
+    }])
 }
