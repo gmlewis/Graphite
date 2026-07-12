@@ -1030,11 +1030,53 @@ impl EditorWrapper {
 /// Returns a JSON string with the result.
 #[cfg(not(feature = "native"))]
 fn mcp_tool_handler(wrapper: &EditorWrapper, tool_name: &str, args: &serde_json::Value) -> String {
+	use crate::MESSAGE_BUFFER;
 	use editor::messages::tool::utility_types::ToolType;
 
-	// Helper to dispatch a message
-	let dispatch = |msg: Message| {
-		wrapper.dispatch(msg);
+	// Helper to dispatch a message and capture any error dialogs before they reach JS.
+	// Returns Ok(()) on success, or Err("error title") if the editor produced a DisplayDialog (error modal).
+	let dispatch_capturing_errors = |msg: Message| -> Result<(), String> {
+		if EDITOR_HAS_CRASHED.load(Ordering::SeqCst) {
+			return Err("Editor has crashed".into());
+		}
+
+		let frontend_messages = EDITOR.with(|editor| {
+			let mut guard = editor.try_lock();
+			let Ok(Some(editor)) = guard.as_deref_mut() else {
+				MESSAGE_BUFFER.with_borrow_mut(|buffer| buffer.push(msg.into()));
+				return vec![];
+			};
+			editor.handle_message(msg)
+		});
+
+		// Check for error dialogs BEFORE forwarding to JS
+		for msg in &frontend_messages {
+			if let FrontendMessage::DisplayDialog { title, .. } = msg {
+				if title.to_lowercase().contains("error") {
+					// Suppress the modal — return the error to the MCP client instead
+					return Err(title.clone());
+				}
+			}
+		}
+
+		// No error dialog — forward all frontend messages to JS as normal
+		for msg in frontend_messages {
+			wrapper.send_frontend_message_to_js(msg);
+		}
+		Ok(())
+	};
+
+	// Wraps dispatch_capturing_errors; on error, returns MCP error JSON immediately
+	let dispatch = |msg: Message| -> Option<String> {
+		match dispatch_capturing_errors(msg) {
+			Ok(()) => None,
+			Err(title) => Some(
+				serde_json::to_string(&serde_json::json!({
+					"content": [{"type": "text", "text": format!("Editor error: {title}")}],
+					"isError": true
+				})).unwrap_or_else(|_| r#"{"content":[{"type":"text","text":"Unknown error"}],"isError":true}"#.into())
+			),
+		}
 	};
 
 	// Helper to validate SVG has a root <svg> element before dispatching
@@ -1071,12 +1113,12 @@ fn mcp_tool_handler(wrapper: &EditorWrapper, tool_name: &str, args: &serde_json:
 
 		"create_document" => {
 			let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("Untitled").to_string();
-			dispatch(Message::Portfolio(PortfolioMessage::NewDocumentWithName { name }));
+			if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::NewDocumentWithName { name })) { return err; }
 			serde_json::json!({"content": [{"type": "text", "text": "Document created"}]})
 		}
 
 		"list_documents" => {
-			dispatch(Message::Portfolio(PortfolioMessage::UpdateOpenDocumentsList));
+			if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::UpdateOpenDocumentsList)) { return err; }
 			serde_json::json!({"content": [{"type": "text", "text": "Document list updated in UI"}]})
 		}
 
@@ -1121,12 +1163,12 @@ fn mcp_tool_handler(wrapper: &EditorWrapper, tool_name: &str, args: &serde_json:
 			if let Err(e) = validate_svg(&svg, "create_rectangle") {
 				return serde_json::to_string(&serde_json::json!({"content": [{"type": "text", "text": e}], "isError": true})).unwrap();
 			}
-			dispatch(Message::Portfolio(PortfolioMessage::InsertSvg {
+			if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::InsertSvg {
 				name: Some("Rectangle".into()),
 				svg,
 				mouse: None,
 				parent_and_insert_index: None,
-			}));
+			})) { return err; }
 			serde_json::json!({"content": [{"type": "text", "text": format!("Created rectangle at ({x}, {y}) {w}x{h}")}]})
 		}
 
@@ -1142,12 +1184,12 @@ fn mcp_tool_handler(wrapper: &EditorWrapper, tool_name: &str, args: &serde_json:
 			if let Err(e) = validate_svg(&svg, "create_ellipse") {
 				return serde_json::to_string(&serde_json::json!({"content": [{"type": "text", "text": e}], "isError": true})).unwrap();
 			}
-			dispatch(Message::Portfolio(PortfolioMessage::InsertSvg {
+			if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::InsertSvg {
 				name: Some("Ellipse".into()),
 				svg,
 				mouse: None,
 				parent_and_insert_index: None,
-			}));
+			})) { return err; }
 			serde_json::json!({"content": [{"type": "text", "text": format!("Created ellipse at ({cx}, {cy}) rx={rx} ry={ry}")}]})
 		}
 
@@ -1164,12 +1206,12 @@ fn mcp_tool_handler(wrapper: &EditorWrapper, tool_name: &str, args: &serde_json:
 			if let Err(e) = validate_svg(&svg, "create_line") {
 				return serde_json::to_string(&serde_json::json!({"content": [{"type": "text", "text": e}], "isError": true})).unwrap();
 			}
-			dispatch(Message::Portfolio(PortfolioMessage::InsertSvg {
+			if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::InsertSvg {
 				name: Some("Line".into()),
 				svg,
 				mouse: None,
 				parent_and_insert_index: None,
-			}));
+			})) { return err; }
 			serde_json::json!({"content": [{"type": "text", "text": format!("Created line ({x1},{y1}) to ({x2},{y2})")}]})
 		}
 
@@ -1186,12 +1228,12 @@ fn mcp_tool_handler(wrapper: &EditorWrapper, tool_name: &str, args: &serde_json:
 			if let Err(e) = validate_svg(&svg, "create_text") {
 				return serde_json::to_string(&serde_json::json!({"content": [{"type": "text", "text": e}], "isError": true})).unwrap();
 			}
-			dispatch(Message::Portfolio(PortfolioMessage::InsertSvg {
+			if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::InsertSvg {
 				name: Some("Text".into()),
 				svg,
 				mouse: None,
 				parent_and_insert_index: None,
-			}));
+			})) { return err; }
 			serde_json::json!({"content": [{"type": "text", "text": format!("Created text at ({x}, {y}): \"{text}\"")}]})
 		}
 
@@ -1199,11 +1241,11 @@ fn mcp_tool_handler(wrapper: &EditorWrapper, tool_name: &str, args: &serde_json:
 			let id_num = args.get("layer_id").and_then(|v| v.as_str()).and_then(|s| s.parse::<u64>().ok()).or_else(|| args.get("layer_id").and_then(|v| v.as_u64()));
 			match id_num {
 				Some(id) => {
-					dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::SelectLayer {
+					if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::SelectLayer {
 						id: NodeId(id),
 						ctrl: false,
 						shift: false,
-					})));
+					}))) { return err; }
 					serde_json::json!({"content": [{"type": "text", "text": format!("Selected layer {id}")}]})
 				}
 				None => serde_json::json!({"content": [{"type": "text", "text": "Error: Missing or invalid layer_id"}], "isError": true}),
@@ -1211,53 +1253,53 @@ fn mcp_tool_handler(wrapper: &EditorWrapper, tool_name: &str, args: &serde_json:
 		}
 
 		"delete_selected" => {
-			dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::DeleteSelectedLayers)));
+			if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::DeleteSelectedLayers))) { return err; }
 			serde_json::json!({"content": [{"type": "text", "text": "Selected layers deleted"}]})
 		}
 
 		"undo" => {
-			dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::DocumentHistoryBackward)));
+			if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::DocumentHistoryBackward))) { return err; }
 			serde_json::json!({"content": [{"type": "text", "text": "Undone"}]})
 		}
 
 		"redo" => {
-			dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::DocumentHistoryForward)));
+			if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::DocumentHistoryForward))) { return err; }
 			serde_json::json!({"content": [{"type": "text", "text": "Redone"}]})
 		}
 
 		"set_fill_color" => {
 			let opacity = args.get("opacity").and_then(|v| v.as_f64()).unwrap_or(100.);
-			dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::SetFillForSelectedLayers {
+			if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::SetFillForSelectedLayers {
 				fill: opacity / 100.,
-			})));
+			}))) { return err; }
 			serde_json::json!({"content": [{"type": "text", "text": format!("Set fill opacity to {opacity}%")}]})
 		}
 
 		"set_opacity" => {
 			let opacity = args.get("opacity").and_then(|v| v.as_f64()).unwrap_or(100.);
-			dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::SetOpacityForSelectedLayers {
+			if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::SetOpacityForSelectedLayers {
 				opacity: opacity / 100.,
-			})));
+			}))) { return err; }
 			serde_json::json!({"content": [{"type": "text", "text": format!("Set opacity to {opacity}%")}]})
 		}
 
 		"set_blend_mode" => {
 			let mode = args.get("blend_mode").and_then(|v| v.as_str()).unwrap_or("Normal");
-			dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::SetBlendModeForSelectedLayers {
+			if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::SetBlendModeForSelectedLayers {
 				blend_mode: graphene_std::raster::BlendMode::Normal,
-			})));
+			}))) { return err; }
 			serde_json::json!({"content": [{"type": "text", "text": format!("Set blend mode to {mode}")}]})
 		}
 
 		"move_layer" => {
 			let dx = args.get("dx").and_then(|v| v.as_f64()).unwrap_or(0.);
 			let dy = args.get("dy").and_then(|v| v.as_f64()).unwrap_or(0.);
-			dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::NudgeSelectedLayers {
+			if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::NudgeSelectedLayers {
 				delta_x: dx,
 				delta_y: dy,
 				resize: editor::messages::input_mapper::utility_types::input_keyboard::Key::Alt,
 				resize_opposite: editor::messages::input_mapper::utility_types::input_keyboard::Key::Control,
-			})));
+			}))) { return err; }
 			serde_json::json!({"content": [{"type": "text", "text": format!("Moved selected layers by ({dx}, {dy})")}]})
 		}
 
@@ -1349,19 +1391,19 @@ fn mcp_tool_handler(wrapper: &EditorWrapper, tool_name: &str, args: &serde_json:
 				"Eyedropper" => ToolType::Eyedropper,
 				_ => ToolType::Select,
 			};
-			dispatch(Message::Tool(ToolMessage::ActivateTool { tool_type }));
+			if let Some(err) = dispatch(Message::Tool(ToolMessage::ActivateTool { tool_type })) { return err; }
 			serde_json::json!({"content": [{"type": "text", "text": format!("Activated tool: {tool}")}]})
 		}
 
 		"zoom_to_fit" => {
-			dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::ZoomCanvasToFitAll)));
+			if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::ZoomCanvasToFitAll))) { return err; }
 			serde_json::json!({"content": [{"type": "text", "text": "Zoomed to fit"}]})
 		}
 
 		"set_viewport" => {
 			let zoom = args.get("zoom").and_then(|v| v.as_f64());
 			if let Some(zf) = zoom {
-				dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::Navigation(NavigationMessage::CanvasZoomSet { zoom_factor: zf }))));
+				if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::Navigation(NavigationMessage::CanvasZoomSet { zoom_factor: zf })))) { return err; }
 			}
 			serde_json::json!({"content": [{"type": "text", "text": "Viewport updated"}]})
 		}
@@ -1393,11 +1435,11 @@ fn mcp_tool_handler(wrapper: &EditorWrapper, tool_name: &str, args: &serde_json:
 
 			if let Some(id) = layer_id_num {
 				let layer = LayerNodeIdentifier::new_unchecked(NodeId(id));
-				dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::GraphOperation(GraphOperationMessage::StrokeSet {
+				if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::GraphOperation(GraphOperationMessage::StrokeSet {
 					layer,
 					color: Some(color),
 					stroke,
-				}))));
+				})))) { return err; }
 				serde_json::json!({"content": [{"type": "text", "text": format!("Set stroke: weight={weight}, color={color_str}")}]})
 			} else {
 				serde_json::json!({"content": [{"type": "text", "text": "No layer selected"}], "isError": true})
