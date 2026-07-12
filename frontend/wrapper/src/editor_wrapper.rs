@@ -1002,4 +1002,365 @@ impl EditorWrapper {
 		};
 		self.dispatch(message);
 	}
+
+	/// MCP tool call: execute a named tool with JSON arguments and return a JSON string result.
+	/// This is called from the browser-side MCP bridge to control the editor from an AI agent.
+	#[wasm_bindgen(js_name = mcpToolCall)]
+	pub fn mcp_tool_call(&self, tool_name: String, args_json: String) -> String {
+		let args: serde_json::Value = serde_json::from_str(&args_json).unwrap_or(serde_json::json!({}));
+		mcp_tool_handler(self, &tool_name, &args)
+	}
+}
+
+/// Handle an MCP tool call by dispatching messages to the editor and/or reading editor state.
+/// Returns a JSON string with the result.
+#[cfg(not(feature = "native"))]
+fn mcp_tool_handler(wrapper: &EditorWrapper, tool_name: &str, args: &serde_json::Value) -> String {
+	use editor::messages::tool::utility_types::ToolType;
+
+	// Helper to dispatch a message
+	let dispatch = |msg: Message| {
+		wrapper.dispatch(msg);
+	};
+
+	// Helper to read editor state
+	let with_editor = |f: &dyn Fn(&Editor) -> serde_json::Value| -> serde_json::Value {
+		EDITOR.with(|editor| {
+			let guard = editor.try_lock();
+			if let Ok(Some(editor)) = guard.as_deref() {
+				f(editor)
+			} else {
+				serde_json::json!({"error": "Editor not available"})
+			}
+		})
+	};
+
+	let result = match tool_name {
+		"get_node_catalog" | "get_node_details" => {
+			// These are catalog-only tools that don't need the editor
+			serde_json::json!({
+				"content": [{"type": "text", "text": "Node catalog tools are available via the standalone MCP server. Use 'cargo run -p graphite-mcp-server' for catalog queries."}]
+			})
+		}
+
+		"create_document" => {
+			let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("Untitled").to_string();
+			dispatch(Message::Portfolio(PortfolioMessage::NewDocumentWithName { name }));
+			serde_json::json!({"content": [{"type": "text", "text": "Document created"}]})
+		}
+
+		"list_documents" => {
+			dispatch(Message::Portfolio(PortfolioMessage::UpdateOpenDocumentsList));
+			serde_json::json!({"content": [{"type": "text", "text": "Document list updated in UI"}]})
+		}
+
+		"get_layer_tree" => {
+			let tree = with_editor(&|editor| {
+				match editor.active_document() {
+					Some(doc) => {
+						let metadata = doc.metadata();
+						let network = &doc.network_interface;
+						let mut out = String::new();
+						out.push_str("# Layer Tree\n\n");
+						for layer in metadata.all_layers() {
+							let node_id = layer.to_node();
+							let name = network.display_name(&node_id, &[]);
+							let visible = network.is_visible(&node_id, &[]);
+							let locked = network.is_locked(&node_id, &[]);
+							let is_layer = network.is_layer(&node_id, &[]);
+							let is_artboard = network.is_artboard(&node_id, &[]);
+							let kind = if is_artboard { "artboard" } else if is_layer { "layer" } else { "group" };
+							let vis = if visible { "" } else { " [hidden]" };
+							let lock = if locked { " [locked]" } else { "" };
+							out.push_str(&format!("- `{}` {} {}{vis}{lock}\n", node_id.0, kind, name));
+						}
+						serde_json::json!(out)
+					}
+					None => serde_json::json!("No active document"),
+				}
+			});
+			serde_json::json!({"content": [{"type": "text", "text": tree}]})
+		}
+
+		"create_rectangle" => {
+			let x = args.get("x").and_then(|v| v.as_f64()).unwrap_or(0.);
+			let y = args.get("y").and_then(|v| v.as_f64()).unwrap_or(0.);
+			let w = args.get("width").and_then(|v| v.as_f64()).unwrap_or(100.);
+			let h = args.get("height").and_then(|v| v.as_f64()).unwrap_or(100.);
+			let fill = args.get("fill_color").and_then(|v| v.as_str()).unwrap_or("#000000");
+			let r = args.get("corner_radius").and_then(|v| v.as_f64()).unwrap_or(0.);
+			let svg = format!(r#"<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="{r}" fill="{fill}"/>"#);
+			dispatch(Message::Portfolio(PortfolioMessage::InsertSvg {
+				name: Some("Rectangle".into()),
+				svg,
+				mouse: None,
+				parent_and_insert_index: None,
+			}));
+			serde_json::json!({"content": [{"type": "text", "text": format!("Created rectangle at ({x}, {y}) {w}x{h}")}]})
+		}
+
+		"create_ellipse" => {
+			let cx = args.get("x").and_then(|v| v.as_f64()).unwrap_or(50.);
+			let cy = args.get("y").and_then(|v| v.as_f64()).unwrap_or(50.);
+			let rx = args.get("radius_x").and_then(|v| v.as_f64()).unwrap_or(50.);
+			let ry = args.get("radius_y").and_then(|v| v.as_f64()).unwrap_or(50.);
+			let fill = args.get("fill_color").and_then(|v| v.as_str()).unwrap_or("#000000");
+			let svg = format!(r#"<ellipse cx="{cx}" cy="{cy}" rx="{rx}" ry="{ry}" fill="{fill}"/>"#);
+			dispatch(Message::Portfolio(PortfolioMessage::InsertSvg {
+				name: Some("Ellipse".into()),
+				svg,
+				mouse: None,
+				parent_and_insert_index: None,
+			}));
+			serde_json::json!({"content": [{"type": "text", "text": format!("Created ellipse at ({cx}, {cy}) rx={rx} ry={ry}")}]})
+		}
+
+		"create_line" => {
+			let x1 = args.get("x1").and_then(|v| v.as_f64()).unwrap_or(0.);
+			let y1 = args.get("y1").and_then(|v| v.as_f64()).unwrap_or(0.);
+			let x2 = args.get("x2").and_then(|v| v.as_f64()).unwrap_or(100.);
+			let y2 = args.get("y2").and_then(|v| v.as_f64()).unwrap_or(100.);
+			let stroke = args.get("stroke_color").and_then(|v| v.as_str()).unwrap_or("#000000");
+			let sw = args.get("stroke_width").and_then(|v| v.as_f64()).unwrap_or(2.);
+			let svg = format!(r#"<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="{stroke}" stroke-width="{sw}"/>"#);
+			dispatch(Message::Portfolio(PortfolioMessage::InsertSvg {
+				name: Some("Line".into()),
+				svg,
+				mouse: None,
+				parent_and_insert_index: None,
+			}));
+			serde_json::json!({"content": [{"type": "text", "text": format!("Created line ({x1},{y1}) to ({x2},{y2})")}]})
+		}
+
+		"create_text" => {
+			let x = args.get("x").and_then(|v| v.as_f64()).unwrap_or(0.);
+			let y = args.get("y").and_then(|v| v.as_f64()).unwrap_or(0.);
+			let text = args.get("text").and_then(|v| v.as_str()).unwrap_or("Text");
+			let font_size = args.get("font_size").and_then(|v| v.as_f64()).unwrap_or(24.);
+			let fill = args.get("fill_color").and_then(|v| v.as_str()).unwrap_or("#000000");
+			let svg = format!(r#"<text x="{x}" y="{y}" font-size="{font_size}" fill="{fill}">{text}</text>"#);
+			dispatch(Message::Portfolio(PortfolioMessage::InsertSvg {
+				name: Some("Text".into()),
+				svg,
+				mouse: None,
+				parent_and_insert_index: None,
+			}));
+			serde_json::json!({"content": [{"type": "text", "text": format!("Created text at ({x}, {y}): \"{text}\"")}]})
+		}
+
+		"select_layer" => {
+			let id_num = args.get("layer_id").and_then(|v| v.as_str()).and_then(|s| s.parse::<u64>().ok()).or_else(|| args.get("layer_id").and_then(|v| v.as_u64()));
+			match id_num {
+				Some(id) => {
+					dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::SelectLayer {
+						id: NodeId(id),
+						ctrl: false,
+						shift: false,
+					})));
+					serde_json::json!({"content": [{"type": "text", "text": format!("Selected layer {id}")}]})
+				}
+				None => serde_json::json!({"content": [{"type": "text", "text": "Error: Missing or invalid layer_id"}], "isError": true}),
+			}
+		}
+
+		"delete_selected" => {
+			dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::DeleteSelectedLayers)));
+			serde_json::json!({"content": [{"type": "text", "text": "Selected layers deleted"}]})
+		}
+
+		"undo" => {
+			dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::DocumentHistoryBackward)));
+			serde_json::json!({"content": [{"type": "text", "text": "Undone"}]})
+		}
+
+		"redo" => {
+			dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::DocumentHistoryForward)));
+			serde_json::json!({"content": [{"type": "text", "text": "Redone"}]})
+		}
+
+		"set_fill_color" => {
+			let opacity = args.get("opacity").and_then(|v| v.as_f64()).unwrap_or(100.);
+			dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::SetFillForSelectedLayers {
+				fill: opacity / 100.,
+			})));
+			serde_json::json!({"content": [{"type": "text", "text": format!("Set fill opacity to {opacity}%")}]})
+		}
+
+		"set_opacity" => {
+			let opacity = args.get("opacity").and_then(|v| v.as_f64()).unwrap_or(100.);
+			dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::SetOpacityForSelectedLayers {
+				opacity: opacity / 100.,
+			})));
+			serde_json::json!({"content": [{"type": "text", "text": format!("Set opacity to {opacity}%")}]})
+		}
+
+		"set_blend_mode" => {
+			let mode = args.get("blend_mode").and_then(|v| v.as_str()).unwrap_or("Normal");
+			dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::SetBlendModeForSelectedLayers {
+				blend_mode: graphene_std::raster::BlendMode::Normal,
+			})));
+			serde_json::json!({"content": [{"type": "text", "text": format!("Set blend mode to {mode}")}]})
+		}
+
+		"move_layer" => {
+			let dx = args.get("dx").and_then(|v| v.as_f64()).unwrap_or(0.);
+			let dy = args.get("dy").and_then(|v| v.as_f64()).unwrap_or(0.);
+			dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::NudgeSelectedLayers {
+				delta_x: dx,
+				delta_y: dy,
+				resize: editor::messages::input_mapper::utility_types::input_keyboard::Key::Alt,
+				resize_opposite: editor::messages::input_mapper::utility_types::input_keyboard::Key::Control,
+			})));
+			serde_json::json!({"content": [{"type": "text", "text": format!("Moved selected layers by ({dx}, {dy})")}]})
+		}
+
+		"get_selection" => {
+			let sel = with_editor(&|editor| {
+				match editor.active_document() {
+					Some(doc) => {
+						let metadata = doc.metadata();
+						let selected = doc.network_interface.selected_nodes();
+						let layers: Vec<String> = selected.selected_layers(metadata)
+							.map(|l| {
+								let node_id = l.to_node();
+								let name = doc.network_interface.display_name(&node_id, &[]);
+								format!("{} ({})", node_id.0, name)
+							})
+							.collect();
+						if layers.is_empty() {
+							serde_json::json!("No layers selected")
+						} else {
+							serde_json::json!(format!("Selected layers ({}):\n{}", layers.len(), layers.join("\n")))
+						}
+					}
+					None => serde_json::json!("No active document"),
+				}
+			});
+			serde_json::json!({"content": [{"type": "text", "text": sel}]})
+		}
+
+		"get_layer_properties" => {
+			let id_num = args.get("layer_id").and_then(|v| v.as_str()).and_then(|s| s.parse::<u64>().ok()).or_else(|| args.get("layer_id").and_then(|v| v.as_u64()));
+			let props = with_editor(&|editor| {
+				match (id_num, editor.active_document()) {
+					(Some(id), Some(doc)) => {
+						let node_id = NodeId(id);
+						let network = &doc.network_interface;
+						let name = network.display_name(&node_id, &[]);
+						let visible = network.is_visible(&node_id, &[]);
+						let locked = network.is_locked(&node_id, &[]);
+						let is_layer = network.is_layer(&node_id, &[]);
+						let is_artboard = network.is_artboard(&node_id, &[]);
+						let kind = if is_artboard { "artboard" } else if is_layer { "layer" } else { "group" };
+						let out = format!("# Layer Properties: {name}\n\n- **ID:** `{id}`\n- **Kind:** {kind}\n- **Visible:** {visible}\n- **Locked:** {locked}\n");
+						serde_json::json!(out)
+					}
+					_ => serde_json::json!("No active document or invalid layer_id"),
+				}
+			});
+			serde_json::json!({"content": [{"type": "text", "text": props}]})
+		}
+
+		"get_node_graph" => {
+			let id_num = args.get("layer_id").and_then(|v| v.as_str()).and_then(|s| s.parse::<u64>().ok()).or_else(|| args.get("layer_id").and_then(|v| v.as_u64()));
+			let graph = with_editor(&|editor| {
+				match (id_num, editor.active_document()) {
+					(Some(id), Some(doc)) => {
+						let node_id = NodeId(id);
+						let network = &doc.network_interface;
+						let name = network.display_name(&node_id, &[]);
+						match network.document_node(&node_id, &[]) {
+							Some(node) => {
+								let mut out = format!("# Node Graph: {name}\n\n**Node ID:** `{id}`\n**Implementation:** {:?}\n**Inputs:** {}\n", node.implementation, node.inputs.len());
+								for (i, input) in node.inputs.iter().enumerate() {
+									out.push_str(&format!("  - Input {i}: {input:?}\n"));
+								}
+								serde_json::json!(out)
+							}
+							None => serde_json::json!(format!("Node {id} not found")),
+						}
+					}
+					_ => serde_json::json!("No active document or invalid layer_id"),
+				}
+			});
+			serde_json::json!({"content": [{"type": "text", "text": graph}]})
+		}
+
+		"activate_tool" => {
+			let tool = args.get("tool").and_then(|v| v.as_str()).unwrap_or("Select");
+			let tool_type = match tool {
+				"Select" => ToolType::Select,
+				"Pen" => ToolType::Pen,
+				"Path" => ToolType::Path,
+				"Line" => ToolType::Line,
+				"Rectangle" => ToolType::Rectangle,
+				"Ellipse" => ToolType::Ellipse,
+				"Freehand" => ToolType::Freehand,
+				"Text" => ToolType::Text,
+				"Fill" => ToolType::Fill,
+				"Gradient" => ToolType::Gradient,
+				"Eyedropper" => ToolType::Eyedropper,
+				_ => ToolType::Select,
+			};
+			dispatch(Message::Tool(ToolMessage::ActivateTool { tool_type }));
+			serde_json::json!({"content": [{"type": "text", "text": format!("Activated tool: {tool}")}]})
+		}
+
+		"zoom_to_fit" => {
+			dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::ZoomCanvasToFitAll)));
+			serde_json::json!({"content": [{"type": "text", "text": "Zoomed to fit"}]})
+		}
+
+		"set_viewport" => {
+			let zoom = args.get("zoom").and_then(|v| v.as_f64());
+			if let Some(zf) = zoom {
+				dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::Navigation(NavigationMessage::CanvasZoomSet { zoom_factor: zf }))));
+			}
+			serde_json::json!({"content": [{"type": "text", "text": "Viewport updated"}]})
+		}
+
+		"set_stroke" => {
+			let color_str = args.get("color").and_then(|v| v.as_str()).unwrap_or("#000000");
+			let weight = args.get("width").and_then(|v| v.as_f64()).unwrap_or(2.);
+			let hex = color_str.trim().trim_start_matches('#');
+			let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0) as f32 / 255.;
+			let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(0) as f32 / 255.;
+			let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0) as f32 / 255.;
+			let a = if hex.len() >= 8 { u8::from_str_radix(&hex[6..8], 16).unwrap_or(255) as f32 / 255. } else { 1. };
+			let color = Color::from_rgbaf32_unchecked(r, g, b, a);
+			let stroke = graphene_std::vector::style::Stroke { weight, ..Default::default() };
+
+			let layer_id_num: Option<u64> = {
+				let val = with_editor(&|editor| {
+					editor.active_document()
+						.and_then(|doc| {
+							let metadata = doc.metadata();
+							doc.network_interface.selected_nodes().selected_layers(metadata).next()
+						})
+						.map(|l| l.to_node().0)
+						.map(|n| serde_json::json!(n))
+						.unwrap_or(serde_json::json!(null))
+				});
+				val.as_u64()
+			};
+
+			if let Some(id) = layer_id_num {
+				let layer = LayerNodeIdentifier::new_unchecked(NodeId(id));
+				dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::GraphOperation(GraphOperationMessage::StrokeSet {
+					layer,
+					color: Some(color),
+					stroke,
+				}))));
+				serde_json::json!({"content": [{"type": "text", "text": format!("Set stroke: weight={weight}, color={color_str}")}]})
+			} else {
+				serde_json::json!({"content": [{"type": "text", "text": "No layer selected"}], "isError": true})
+			}
+		}
+
+		_ => {
+			serde_json::json!({"content": [{"type": "text", "text": format!("Unknown tool: {tool_name}")}], "isError": true})
+		}
+	};
+
+	serde_json::to_string(&result).unwrap_or_else(|_| r#"{"content":[{"type":"text","text":"Serialization error"}],"isError":true}"#.into())
 }

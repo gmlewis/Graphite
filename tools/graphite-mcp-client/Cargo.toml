@@ -1,7 +1,7 @@
 [package]
 name = "graphite-mcp-client"
 version = "0.1.0"
-description = "Lightweight MCP client proxy for Graphite"
+description = "MCP relay server for Graphite: bridges stdio (agent) to WebSocket (browser)"
 edition = "2021"
 
 [[bin]]
@@ -9,7 +9,7 @@ name = "graphite-mcp-client"
 path = "src/main.rs"
 
 [dependencies]
-tokio = { version = "1", features = ["macros", "io-std", "io-util", "rt", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "io-std", "io-util", "rt", "rt-multi-thread", "net", "sync", "time"] }
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
 serde_json = "1"
