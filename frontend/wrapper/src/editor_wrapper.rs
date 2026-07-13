@@ -1370,7 +1370,7 @@ fn mcp_tool_handler(wrapper: &EditorWrapper, tool_name: &str, args: &serde_json:
 			};
 			if let Some(err) = dispatch(Message::Portfolio(PortfolioMessage::Document(DocumentMessage::SetBlendModeForSelectedLayers {
 				blend_mode,
-			})))) { return err; }
+			}))) { return err; }
 			serde_json::json!({"content": [{"type": "text", "text": format!("Set blend mode to {mode}")}]})
 		}
 
