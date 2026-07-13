@@ -1,0 +1,282 @@
+# Graphite MCP Server
+
+The MCP (Model Context Protocol) server for the Graphite vector graphics editor.
+This is the entry point an AI agent (Claude Desktop, opencode, etc.) connects to
+in order to drive the Graphite editor.
+
+## Architecture
+
+```
+Agent (stdio JSON-RPC)
+  │
+  ▼
+graphite-mcp-client        ← this binary, a thin stdio↔WebSocket relay
+  │  (listens on ws://127.0.0.1:8081)
+  ▼
+Browser (Graphite web app running at http://localhost:8080)
+  │  frontend/src/mcp-bridge.ts connects to the relay
+  ▼
+WASM editor                 ← frontend/wrapper/src/editor_wrapper.rs
+   mcp_tool_call() dispatches into the real editor message system
+```
+
+The relay is deliberately tiny (~1 MB): it only forwards JSON-RPC lines from
+stdin to the browser over WebSocket and pipes responses back to stdout. All
+real work happens in the browser-side WASM editor, which is the same editor
+the user sees and interacts with — so the agent and the user work on the same
+document simultaneously, in real time.
+
+## Setup
+
+### 1. Start the Graphite web app
+
+```bash
+cd frontend && npm run dev -- --port 8080 --host 0.0.0.0
+```
+
+Then open <http://localhost:8080> in your browser. The browser tab must stay
+open for the MCP server to function — closing it disconnects the agent.
+
+### 2. Build and install the relay
+
+```bash
+./build-and-install.sh
+# or just this crate:
+cargo build --release -p graphite-mcp-client
+cp target/release/graphite-mcp-client ~/tools/bin/
+```
+
+### 3. Configure your agent
+
+Example for opencode (`~/.config/opencode/opencode.json`):
+
+```json
+{
+  "mcp": {
+    "graphite": {
+      "type": "local",
+      "command": ["graphite-mcp-client"],
+      "enabled": true
+    }
+  }
+}
+```
+
+The relay defaults to WebSocket port 8081. Override with the
+`GRAPHITE_MCP_PORT` environment variable if needed.
+
+## Agent guidance: how to use these tools efficiently
+
+These rules are derived from real-world usage. Following them prevents timeouts,
+excessive layer counts, and failed operations.
+
+### Workflow
+
+1. **Start with `get_document_info`.** If it says "No active document", call
+   `create_document`.
+
+2. **Plan your artwork as SVG.** Think in SVG elements (`<rect>`, `<circle>`,
+   `<path>`, `<g>`, gradients). Build the SVG string and import it with one
+   `import_svg` call. This issues a single `InsertSvg` dispatch (fast), though
+   Graphite creates one layer per SVG element.
+
+3. **For complex curves** (mathematical curves, spirographs, flow fields,
+   Lissajous figures), use `create_path` for individual curves or include
+   `<path>` elements in your `import_svg` SVG. A single path can have hundreds
+   of points and still create only one layer.
+
+4. **Read back what you built** with `get_layer_tree` or `get_selected_layer_info`
+   to get real layer IDs before calling `select_layer` / `set_stroke` / etc.
+
+5. **Call `zoom_to_fit`** after creating content so the user can see the result.
+
+### Tool efficiency hierarchy
+
+```
+import_svg     ← 1 call, 1 InsertSvg dispatch, N layers (1 per SVG element). BEST.
+create_path    ← 1 call, 1 layer, 1 complex curve (hundreds of points OK).
+batch_create   ← 1 call, 1 InsertSvg dispatch, N layers (1 per shape). Efficient.
+create_*       ← 1 call, 1 layer, 1 InsertSvg dispatch. Fine for a few shapes only.
+```
+
+### Critical limitations
+
+- **`batch_create` issues one dispatch.** All shapes in the array are combined
+  into a single SVG and dispatched as one `InsertSvg` message. Graphite still
+  creates one layer per SVG element, but one dispatch is much faster than N
+  separate dispatches.
+
+- **The browser slows down past ~200 layers.** If your document accumulates
+  200+ layers (e.g. from many `batch_create` or `create_*` calls), even
+  `get_document_info` may take longer. Start a new document with
+  `create_document` rather than trying to delete layers one by one.
+
+- **Tool call argument size is limited by the agent's context window.** The
+  agent cannot inline more than ~20KB of data in a single tool-call parameter.
+  A single `import_svg` call with a ~20KB SVG string works well. For larger
+  artwork, split into multiple `import_svg` calls (each creates one layer
+  group) or use `create_path` for individual complex curves.
+
+- **Never issue tool calls in parallel.** The relay serializes stdin→WebSocket,
+  but the browser handles them one at a time; parallel calls interleave
+  responses and cause timeouts. Always call sequentially.
+
+- **`set_fill_color` sets the fill COLOR** (hex string, e.g. `#FF0000`). It
+  dispatches `GraphOperationMessage::FillColorSet` on the first selected layer.
+  Use `set_fill_opacity` to set the fill opacity (0–100) instead.
+
+- **`set_blend_mode` dispatches the actual blend mode.** The string argument is
+  deserialized to `BlendMode` via serde and dispatched to the editor.
+
+- **`list_documents` has been removed.** It returned no useful data in the
+  browser relay. Use `get_document_info` instead.
+
+- **`get_node_catalog` / `get_node_details` have been removed.** The standalone
+  `graphite-mcp-server` crate has been deleted. These tools return an error if
+  called. They are no longer listed in the tool set.
+
+### Timeout behaviour
+
+Tool calls have a **5-second timeout**. Every editor command should complete in
+well under 1 second. The relay matches responses to requests by JSON-RPC `id`,
+so a timed-out call cannot poison subsequent calls — its late reply is silently
+discarded. If you see `-32001` errors, the browser is likely stuck (too many
+layers) or disconnected.
+
+### Layer IDs
+
+Layer IDs are integers (e.g. `42`), not GUID strings. They come from
+`get_layer_tree`, `get_selection`, `get_selected_layer_info`, or are implied by
+the creation order. Pass them as a number or a numeric string.
+
+## Tool reference (27 tools)
+
+The authoritative tool list is defined in
+`frontend/src/mcp-bridge.ts` (`TOOLS` array) and the handlers live in
+`frontend/wrapper/src/editor_wrapper.rs` (`mcp_tool_handler`). If you change
+one, change the other.
+
+### Recommended workflow for complex artwork
+
+The most efficient way to build complex artwork:
+
+1. `get_document_info` — confirm a document exists
+2. `create_document` — if needed
+3. `import_svg` — import a single SVG with many elements (1 dispatch, N layers)
+4. `create_path` — add individual complex curves if needed (1 layer each)
+5. `zoom_to_fit` — show the user the result
+
+**Avoid** calling `create_rectangle`/`create_ellipse`/etc. dozens of times — each
+is a separate dispatch. Use `import_svg` or `batch_create` to issue a single
+dispatch instead.
+
+### Inspection (read-only)
+
+| Tool | Args | Returns | Notes |
+|------|------|---------|-------|
+| `get_document_info` | — | name, layer/artboard/selection counts | **Call this first.** Tells you if a document exists and how many layers it has. |
+| `get_layer_tree` | — | markdown list of all layers with IDs, kind, visibility, lock | Flat list, not nested. Use to discover layer IDs. |
+| `get_selection` | — | selected layer IDs + names | |
+| `get_selected_layer_info` | — | per-layer bounds, visibility, lock | Richer than `get_selection` — includes bounding boxes. |
+| `get_layer_properties` | `layer_id` | name, kind, visible, locked | |
+| `get_layer_bounds` | `layer_id` | min/max XY and size | Useful for layout calculations. |
+| `get_node_graph` | `layer_id` | node implementation + inputs dump | Advanced inspection. |
+
+### Creation (write)
+
+| Tool | Key args | Layers created | Notes |
+|------|----------|----------------|-------|
+| `create_document` | `name` | 0 (empty doc) | Creates and switches to a new document. |
+| `import_svg` | `svg, name` | **1 dispatch, N layers** (1 per SVG element) | **THE BEST TOOL for complex artwork.** Supports `<rect>`, `<circle>`, `<path>`, `<g>`, gradients, etc. Keep SVG under ~20KB per call. |
+| `create_path` | `d, fill_color, stroke_color, stroke_width, x, y` | **1 layer** | Single complex curve. Hundreds of path points OK. |
+| `batch_create` | `shapes: [...]` | **1 dispatch, N layers** (1 per shape) | All shapes combined into one SVG, imported in one dispatch. Efficient. |
+| `create_rectangle` | `x, y, width, height, fill_color, corner_radius` | 1 | For a few shapes only. |
+| `create_ellipse` | `x, y, radius_x, radius_y, fill_color` | 1 | `x,y` is the **center**. |
+| `create_line` | `x1, y1, x2, y2, stroke_color, stroke_width` | 1 | |
+| `create_text` | `x, y, text, font_size, fill_color` | 1 | Default Graphite font. |
+
+### Modification (operate on the current selection)
+
+| Tool | Key args | Notes |
+|------|----------|-------|
+| `select_layer` | `layer_id` | Required before any style/transform tool. Replaces selection. |
+| `delete_selected` | — | |
+| `move_layer` | `dx, dy` | Nudges selection in document px. |
+| `set_stroke` | `color, width` | Hex color; first selected layer only. |
+| `set_fill_color` | `color` | Sets fill COLOR (hex). First selected layer. |
+| `set_fill_opacity` | `opacity` (0–100) | Sets fill OPACITY. |
+| `set_opacity` | `opacity` (0–100) | Layer opacity. |
+| `set_blend_mode` | `blend_mode` | Parsed and dispatched to the editor. |
+| `activate_tool` | `tool` | Changes active tool in UI. Does not simulate drawing. |
+
+### Viewport / history
+
+| Tool | Key args | Notes |
+|------|----------|-------|
+| `zoom_to_fit` | — | **Always call after creating content.** |
+| `set_viewport` | `zoom?, pan_x?, pan_y?` | Zoom factor (1.0 = 100%) and/or pan delta (document px). All optional. |
+| `undo` | — | |
+| `redo` | — | |
+
+## Blend modes
+
+`Normal`, `Darken`, `Multiply`, `ColorBurn`, `LinearBurn`, `DarkerColor`,
+`Lighten`, `Screen`, `ColorDodge`, `LinearDodge`, `LighterColor`, `Overlay`,
+`SoftLight`, `HardLight`, `VividLight`, `LinearLight`, `PinLight`, `HardMix`,
+`Difference`, `Exclusion`, `Subtract`, `Divide`, `Hue`, `Saturation`,
+`Color`, `Luminosity`.
+
+## Example: building complex generative artwork
+
+Here is the recommended pattern for building artwork that would be impossible
+to draw by hand (e.g. a flow-field painting with 150 curved paths, 40 gradient
+rings, mathematical rose curves, epicycloids, and Lissajous overlays):
+
+```
+1. get_document_info              → "No active document"
+2. create_document { name: "..." } → "Document created"
+3. import_svg { svg: "<svg>...50 flow-field <path> elements + 30 <circle> rings...</svg>" }
+   → "SVG imported successfully"   (1 dispatch, ~80 layers: 50 paths + 30 circles)
+4. create_path { d: "M...rose curve k=5/3...", stroke_color: "#ffe066" }
+   → "Path created"                (1 layer)
+5. create_path { d: "M...epicycloid...", stroke_color: "#ff00aa" }
+   → "Path created"                (1 layer)
+6. zoom_to_fit                     → "Zoomed to fit"
+```
+
+Total: 6 tool calls, 3 dispatches, ~82 layers, hundreds of elements. The key
+insight: put as much as possible into the `import_svg` SVG string so it all
+goes through one dispatch. Use `create_path` only for individual complex curves
+that are easier to express as standalone path data.
+
+**What NOT to do:** calling `create_rectangle` 169 times issues 169 separate
+dispatches and creates 169 layers, which is slow. Use `import_svg` with 169
+`<rect>` elements (1 dispatch, 169 layers) or `batch_create` with 169 shapes
+(1 dispatch, 169 layers) instead — both are much faster.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `-32000 Graphite web app is not connected` | Browser tab not open, or `mcp-bridge.ts` not connected to the relay. | Open <http://localhost:8080>; wait ~2 s. |
+| `-32001 Tool call timed out` | Browser didn't respond in 5 s. Usually means browser is stuck or disconnected. | Check the browser tab is alive. If the document has >200 layers, create a new document. Avoid parallel calls. |
+| `Editor error: …` modal text | The editor rejected the operation (e.g. no selection). | Read the message; call `select_layer` with a valid ID first. |
+| `Unknown tool: …` | Tool name typo, or the relay/browser version mismatch. | Check `TOOLS` in `frontend/src/mcp-bridge.ts`. |
+| Tool calls used to work but now all time out | Document has accumulated too many layers and the browser is bogged down. | Call `create_document` to start fresh, or ask the user to reload the browser tab. |
+
+## Building from source
+
+```bash
+cargo build --release -p graphite-mcp-client
+```
+
+The relay has no workspace deps beyond `tokio`, `tokio-tungstenite`, `serde`,
+`serde_json`, `anyhow`, `futures-util` — it builds in seconds.
+
+## Related files
+
+| File | Role |
+|------|------|
+| `tools/graphite-mcp-client/src/main.rs` | The relay binary (this crate). |
+| `frontend/src/mcp-bridge.ts` | Browser-side WebSocket client + tool list (`TOOLS`). |
+| `frontend/wrapper/src/editor_wrapper.rs` | `mcp_tool_call` / `mcp_tool_handler` — the real tool implementations. |

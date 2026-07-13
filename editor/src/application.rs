@@ -29,8 +29,8 @@ impl Editor {
 		Self { dispatcher }
 	}
 
-	#[cfg(test)]
-	pub(crate) fn new_local_executor() -> (Self, crate::node_graph_executor::NodeRuntime) {
+	#[cfg(any(test, feature = "headless"))]
+	pub fn new_local_executor() -> (Self, crate::node_graph_executor::NodeRuntime) {
 		let _ = ENVIRONMENT.set(*Editor::environment());
 		graphene_std::uuid::set_uuid_seed(0);
 
@@ -54,6 +54,14 @@ impl Editor {
 
 	pub fn poll_node_graph_evaluation(&mut self, responses: &mut VecDeque<Message>) -> Result<(), String> {
 		self.dispatcher.poll_node_graph_evaluation(responses)
+	}
+
+	pub fn active_document(&self) -> Option<&crate::messages::portfolio::document::DocumentMessageHandler> {
+		self.dispatcher.message_handlers.portfolio_message_handler.active_document()
+	}
+
+	pub fn active_document_mut(&mut self) -> Option<&mut crate::messages::portfolio::document::DocumentMessageHandler> {
+		self.dispatcher.message_handlers.portfolio_message_handler.active_document_mut()
 	}
 }
 

@@ -99,8 +99,8 @@ struct GradientMigration {
 
 impl NodeGraphExecutor {
 	/// A local runtime is useful on threads since having global state causes flakes
-	#[cfg(test)]
-	pub(crate) fn new_with_local_runtime() -> (NodeRuntime, Self) {
+	#[cfg(any(test, feature = "headless"))]
+	pub fn new_with_local_runtime() -> (NodeRuntime, Self) {
 		let (request_sender, request_receiver) = std::sync::mpsc::channel();
 		let (response_sender, response_receiver) = std::sync::mpsc::channel();
 		let node_runtime = NodeRuntime::new(request_receiver, response_sender);
