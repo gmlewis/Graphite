@@ -127,10 +127,10 @@ impl App {
 			preferences,
 			launch_documents: Some(launch_documents),
 			startup_time: None,
-		exiting,
-		exit_reason: ExitReason::Shutdown,
+			exiting,
+			exit_reason: ExitReason::Shutdown,
+		}
 	}
-}
 
 	pub(crate) fn run(mut self, event_loop: EventLoop) -> ExitReason {
 		event_loop.run_app(&mut self).unwrap();

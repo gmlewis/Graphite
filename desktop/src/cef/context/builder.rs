@@ -38,11 +38,7 @@ impl<H: CefEventHandler> CefContextBuilder<H> {
 			// We catch the panic and continue — the editor will still work but without the web UI.
 			let result = std::panic::catch_unwind(|| {
 				let loader = cef::library_loader::LibraryLoader::new(&std::env::current_exe().unwrap(), helper);
-				if loader.load() {
-					Some(loader)
-				} else {
-					None
-				}
+				if loader.load() { Some(loader) } else { None }
 			});
 			match result {
 				Ok(Some(loader)) => Some(loader),

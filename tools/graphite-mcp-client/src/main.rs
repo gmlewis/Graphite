@@ -22,10 +22,7 @@ type WsWriter = Arc<Mutex<futures_util::stream::SplitSink<WebSocketStream<tokio:
 
 #[tokio::main]
 async fn main() -> Result<()> {
-	let port: u16 = std::env::var("GRAPHITE_MCP_PORT")
-		.ok()
-		.and_then(|s| s.parse().ok())
-		.unwrap_or(8081);
+	let port: u16 = std::env::var("GRAPHITE_MCP_PORT").ok().and_then(|s| s.parse().ok()).unwrap_or(8081);
 
 	// Shared state: the currently connected browser WebSocket
 	let browser_ws: Arc<Mutex<Option<WsWriter>>> = Arc::new(Mutex::new(None));
@@ -130,9 +127,7 @@ async fn main() -> Result<()> {
 
 		// Parse the request id once so every response path (including the
 		// "no browser connected" fast-fail below) can echo it back.
-		let request_id = serde_json::from_str::<serde_json::Value>(&line)
-			.ok()
-			.and_then(|v| v.get("id").cloned());
+		let request_id = serde_json::from_str::<serde_json::Value>(&line).ok().and_then(|v| v.get("id").cloned());
 
 		// Wait for the browser to connect before forwarding (up to 10 seconds)
 		let mut waited = 0u64;
@@ -213,9 +208,7 @@ async fn main() -> Result<()> {
 			match tokio::time::timeout(timeout_dur, response_rx.recv()).await {
 				Ok(Some(resp_text)) => {
 					// Check whether this response matches our request id.
-					let resp_id = serde_json::from_str::<serde_json::Value>(&resp_text)
-						.ok()
-						.and_then(|v| v.get("id").cloned());
+					let resp_id = serde_json::from_str::<serde_json::Value>(&resp_text).ok().and_then(|v| v.get("id").cloned());
 					if resp_id.as_ref() != Some(&request_id) {
 						// Stale response from a previous timed-out call — discard and keep waiting.
 						eprintln!("[graphite-mcp-client] Discarding stale response (id mismatch: expected {request_id}, got {resp_id:?})");

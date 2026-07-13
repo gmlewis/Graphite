@@ -109,15 +109,7 @@ pub fn start() {
 		}
 	};
 
-	let app = App::new(
-		cef_context,
-		cef_view_info_sender,
-		wgpu_context,
-		app_event_receiver,
-		app_event_scheduler,
-		prefs,
-		cli.files,
-	);
+	let app = App::new(cef_context, cef_view_info_sender, wgpu_context, app_event_receiver, app_event_scheduler, prefs, cli.files);
 
 	let exit_reason = app.run(event_loop);
 

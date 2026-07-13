@@ -2,6 +2,7 @@
 name = "graphite-mcp-client"
 version = "0.1.0"
 description = "MCP relay server for Graphite: bridges stdio (agent) to WebSocket (browser)"
+license = "Apache-2.0"
 edition = "2021"
 
 [[bin]]
