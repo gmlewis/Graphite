@@ -36,4 +36,4 @@ echo "  Open http://localhost:8080 in your browser"
 echo "  Configure your AI agent to use graphite-mcp-client as an MCP server"
 echo ""
 echo "Make sure $INSTALL_DIR is in your PATH:"
-echo "  export PATH=\"\$HOME/tools/bin:\$PATH\"
+echo '  export PATH="$HOME/tools/bin:$PATH"'

@@ -73,13 +73,12 @@ excessive layer counts, and failed operations.
 ### Workflow
 
 1. **Start with `get_document_info`.** If it says "No active document", call
-   `create_document`. Never call `list_documents` — it only refreshes the UI
-   and returns no data.
+   `create_document`.
 
 2. **Plan your artwork as SVG.** Think in SVG elements (`<rect>`, `<circle>`,
    `<path>`, `<g>`, gradients). Build the SVG string and import it with one
-   `import_svg` call. This creates a single layer group containing all
-   elements — the most efficient approach.
+   `import_svg` call. This issues a single `InsertSvg` dispatch (fast), though
+   Graphite creates one layer per SVG element.
 
 3. **For complex curves** (mathematical curves, spirographs, flow fields,
    Lissajous figures), use `create_path` for individual curves or include
@@ -94,18 +93,18 @@ excessive layer counts, and failed operations.
 ### Tool efficiency hierarchy
 
 ```
-import_svg     ← 1 call, 1 layer group, unlimited elements. BEST.
+import_svg     ← 1 call, 1 InsertSvg dispatch, N layers (1 per SVG element). BEST.
 create_path    ← 1 call, 1 layer, 1 complex curve (hundreds of points OK).
-batch_create   ← 1 call, 1 layer group containing all shapes. Efficient.
-create_*       ← 1 call, 1 shape, 1 layer. Fine for a few shapes only.
+batch_create   ← 1 call, 1 InsertSvg dispatch, N layers (1 per shape). Efficient.
+create_*       ← 1 call, 1 layer, 1 InsertSvg dispatch. Fine for a few shapes only.
 ```
 
 ### Critical limitations
 
-- **`batch_create` now creates one layer group.** All shapes in the array are
-  combined into a single SVG and dispatched as one `InsertSvg`, creating a single
-  layer group regardless of how many shapes are in the array. This is efficient
-  and does not slow the browser down.
+- **`batch_create` issues one dispatch.** All shapes in the array are combined
+  into a single SVG and dispatched as one `InsertSvg` message. Graphite still
+  creates one layer per SVG element, but one dispatch is much faster than N
+  separate dispatches.
 
 - **The browser slows down past ~200 layers.** If your document accumulates
   200+ layers (e.g. from many `batch_create` or `create_*` calls), even
@@ -129,8 +128,8 @@ create_*       ← 1 call, 1 shape, 1 layer. Fine for a few shapes only.
 - **`set_blend_mode` dispatches the actual blend mode.** The string argument is
   deserialized to `BlendMode` via serde and dispatched to the editor.
 
-- **`list_documents` is an alias for `get_document_info`.** It returns the same
-  document metadata. It exists for backward compatibility — use `get_document_info`.
+- **`list_documents` has been removed.** It returned no useful data in the
+  browser relay. Use `get_document_info` instead.
 
 - **`get_node_catalog` / `get_node_details` have been removed.** The standalone
   `graphite-mcp-server` crate has been deleted. These tools return an error if
@@ -163,13 +162,13 @@ The most efficient way to build complex artwork:
 
 1. `get_document_info` — confirm a document exists
 2. `create_document` — if needed
-3. `import_svg` — import a single SVG with many elements (creates 1 layer group)
+3. `import_svg` — import a single SVG with many elements (1 dispatch, N layers)
 4. `create_path` — add individual complex curves if needed (1 layer each)
 5. `zoom_to_fit` — show the user the result
 
-**Avoid** `batch_create` and `create_*` for complex artwork — they create one
-layer per shape and slow the browser down past ~200 layers. Use them only for
-a handful of simple shapes.
+**Avoid** calling `create_rectangle`/`create_ellipse`/etc. dozens of times — each
+is a separate dispatch. Use `import_svg` or `batch_create` to issue a single
+dispatch instead.
 
 ### Inspection (read-only)
 
@@ -182,16 +181,15 @@ a handful of simple shapes.
 | `get_layer_properties` | `layer_id` | name, kind, visible, locked | |
 | `get_layer_bounds` | `layer_id` | min/max XY and size | Useful for layout calculations. |
 | `get_node_graph` | `layer_id` | node implementation + inputs dump | Advanced inspection. |
-| `list_documents` | — | same as `get_document_info` | Alias for `get_document_info`. |
 
 ### Creation (write)
 
 | Tool | Key args | Layers created | Notes |
 |------|----------|----------------|-------|
 | `create_document` | `name` | 0 (empty doc) | Creates and switches to a new document. |
-| `import_svg` | `svg, name` | **1 layer group** regardless of element count | **THE BEST TOOL for complex artwork.** Supports `<rect>`, `<circle>`, `<path>`, `<g>`, gradients, etc. Keep SVG under ~20KB per call. |
+| `import_svg` | `svg, name` | **1 dispatch, N layers** (1 per SVG element) | **THE BEST TOOL for complex artwork.** Supports `<rect>`, `<circle>`, `<path>`, `<g>`, gradients, etc. Keep SVG under ~20KB per call. |
 | `create_path` | `d, fill_color, stroke_color, stroke_width, x, y` | **1 layer** | Single complex curve. Hundreds of path points OK. |
-| `batch_create` | `shapes: [...]` | **1 layer group** containing all shapes | Efficient — all shapes combined into one SVG and imported as a single layer group. |
+| `batch_create` | `shapes: [...]` | **1 dispatch, N layers** (1 per shape) | All shapes combined into one SVG, imported in one dispatch. Efficient. |
 | `create_rectangle` | `x, y, width, height, fill_color, corner_radius` | 1 | For a few shapes only. |
 | `create_ellipse` | `x, y, radius_x, radius_y, fill_color` | 1 | `x,y` is the **center**. |
 | `create_line` | `x1, y1, x2, y2, stroke_color, stroke_width` | 1 | |
@@ -238,7 +236,7 @@ rings, mathematical rose curves, epicycloids, and Lissajous overlays):
 1. get_document_info              → "No active document"
 2. create_document { name: "..." } → "Document created"
 3. import_svg { svg: "<svg>...50 flow-field <path> elements + 30 <circle> rings...</svg>" }
-   → "SVG imported successfully"   (1 layer group, ~50 paths + 30 circles)
+   → "SVG imported successfully"   (1 dispatch, ~80 layers: 50 paths + 30 circles)
 4. create_path { d: "M...rose curve k=5/3...", stroke_color: "#ffe066" }
    → "Path created"                (1 layer)
 5. create_path { d: "M...epicycloid...", stroke_color: "#ff00aa" }
@@ -246,15 +244,15 @@ rings, mathematical rose curves, epicycloids, and Lissajous overlays):
 6. zoom_to_fit                     → "Zoomed to fit"
 ```
 
-Total: 6 tool calls, ~4 layers, hundreds of elements. The key insight: put as
-much as possible into the `import_svg` SVG string so it all becomes one layer
-group. Use `create_path` only for individual complex curves that are easier to
-express as standalone path data.
+Total: 6 tool calls, 3 dispatches, ~82 layers, hundreds of elements. The key
+insight: put as much as possible into the `import_svg` SVG string so it all
+goes through one dispatch. Use `create_path` only for individual complex curves
+that are easier to express as standalone path data.
 
-**What NOT to do:** calling `create_rectangle` 169 times creates 169 separate
-layers and slows the browser to a crawl. Use `import_svg` with 169 `<rect>`
-elements (1 layer group) or `batch_create` with 169 shapes (1 layer group)
-instead.
+**What NOT to do:** calling `create_rectangle` 169 times issues 169 separate
+dispatches and creates 169 layers, which is slow. Use `import_svg` with 169
+`<rect>` elements (1 dispatch, 169 layers) or `batch_create` with 169 shapes
+(1 dispatch, 169 layers) instead — both are much faster.
 
 ## Troubleshooting
 
